@@ -1,0 +1,20 @@
+environment              = "aws"
+aws_region               = "eu-west-1"
+project_name             = "smart-magatzem"
+auth_provider            = "cognito"
+document_ai_provider     = "aws"
+enable_aws_runtime       = false
+lambda_package_path      = "../../build/aws-lambda.zip"
+
+# Si se deja vacío, Terraform genera un nombre basado en la cuenta AWS.
+frontend_bucket_name = ""
+
+# Opcional: solo después de verificar una identidad en SES.
+ses_identity_arn = ""
+ses_from_email   = ""
+
+# Durante las pruebas, redirige la copia al correo indicado sin cambiar el cliente leído.
+email_recipient_override = "rafa@wad.cat"
+
+# Debe ser un modelo multimodal habilitado en Bedrock para la cuenta/región.
+bedrock_model_id = "eu.amazon.nova-lite-v1:0"
