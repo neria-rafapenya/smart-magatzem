@@ -67,6 +67,7 @@ import type {
   IntakeRecord,
   ManualDocumentData,
 } from "./types";
+import { FeedbackNotice } from "./FeedbackNotice";
 
 type SelectedDocument = {
   filename: string;
@@ -2963,6 +2964,7 @@ export function InboundDeliveryScreen({
           <Text style={styles.toastText}>{message}</Text>
         </View>
       ) : null}
+      <FeedbackNotice message={message} error={error} />
     </View>
   );
 }

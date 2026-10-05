@@ -19,6 +19,7 @@ import {
   uploadTenantTemplate,
 } from './api';
 import type { AuthSession, ErpConnection, Tenant, TenantDocumentField, TenantTemplate } from './types';
+import { FeedbackNotice } from './FeedbackNotice';
 
 const AUTH_OPTIONS = [
   { value: 'none', label: 'Sin autenticación' },
@@ -323,6 +324,7 @@ export function AdminSettingsScreen({
         <Button icon="logout" onPress={onLogout}>Salir</Button>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
+        <FeedbackNotice message={message} error={error} />
         {loading ? <Text>Cargando configuración…</Text> : null}
         {error ? <HelperText type="error" visible>{error}</HelperText> : null}
         {message ? <HelperText type="info" visible>{message}</HelperText> : null}
