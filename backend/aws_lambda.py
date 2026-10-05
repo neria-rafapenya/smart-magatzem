@@ -36,7 +36,7 @@ def _response(status: int, body: dict[str, object]) -> dict[str, object]:
             "cache-control": "no-store",
             "access-control-allow-origin": "*",
             "access-control-allow-methods": "GET,POST,PUT,OPTIONS",
-            "access-control-allow-headers": "Authorization,Content-Type,Accept",
+            "access-control-allow-headers": "Authorization,Content-Type,Accept,X-Tenant-Id",
         },
         "body": json.dumps(body, ensure_ascii=False, default=str),
     }
