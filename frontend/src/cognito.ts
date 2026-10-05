@@ -24,7 +24,6 @@ function pool() {
 }
 
 function identityFromSession(session: CognitoUserSession, email: string) {
-  const accessToken = session.getAccessToken().getJwtToken();
   const idToken = session.getIdToken().getJwtToken();
   // CognitoJwtToken ya incluye un decodificador base64 compatible con web,
   // React Native y los tokens base64url emitidos por Cognito.
@@ -32,7 +31,10 @@ function identityFromSession(session: CognitoUserSession, email: string) {
   const groups = Array.isArray(claims['cognito:groups']) ? claims['cognito:groups'].map(String) : [];
   const isAdmin = groups.includes('admin');
   return {
-    access_token: accessToken,
+    // API Gateway está configurado como JWT authorizer con la audiencia del
+    // app client. Esa audiencia está en el ID token; el access token usa
+    // `client_id` y se rechaza antes de llegar a Lambda.
+    access_token: idToken,
     token_type: 'Bearer' as const,
     provider: 'cognito',
     user: {

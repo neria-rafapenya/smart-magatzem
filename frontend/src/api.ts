@@ -55,8 +55,7 @@ export function setTenantId(tenantId: string | null) {
 export async function login(email: string, password: string) {
   if (AUTH_PROVIDER === 'cognito') {
     const session = await loginWithCognito(email, password);
-    // Cognito autentica correctamente, pero las peticiones posteriores al API
-    // necesitan reutilizar explícitamente el access token.
+    // El token de sesión ya contiene el ID token que valida API Gateway.
     setAccessToken(session.access_token);
     setTenantId(session.user.tenant_id);
     // Refresca el rol/tenant desde el backend, que aplica el mapping server-side
