@@ -406,9 +406,11 @@ function DocumentDirectionPicker({
 
 function ManualEntryForm({
   draft,
+  selectedCustomer,
   onChange,
 }: {
   draft: ManualDocumentDraft;
+  selectedCustomer: Customer | null;
   onChange: (next: ManualDocumentDraft) => void;
 }) {
   const update = <K extends keyof ManualDocumentDraft>(
@@ -447,9 +449,18 @@ function ManualEntryForm({
         </View>
       </View>
       <Text variant="bodySmall" style={styles.manualWarning}>
-        El cliente seleccionado se registrará como cliente del documento.
-        Compruébalo antes de continuar.
+        Conservamos los datos aceptados por la lectura y dejamos vacíos los que
+        necesitan confirmación. Compruébalos antes de continuar.
       </Text>
+      {selectedCustomer ? (
+        <View style={styles.manualConfirmedBox}>
+          <MaterialCommunityIcons name="check-circle-outline" size={20} color="#1c7c54" />
+          <View style={styles.manualConfirmedCopy}>
+            <Text variant="labelMedium" style={styles.manualConfirmedLabel}>Cliente conservado</Text>
+            <Text variant="bodySmall">{selectedCustomer.id} · {selectedCustomer.name}</Text>
+          </View>
+        </View>
+      ) : null}
       <Text variant="labelLarge" style={styles.fieldLabel}>
         Tipo confirmado
       </Text>
@@ -2892,6 +2903,7 @@ export function InboundDeliveryScreen({
                       <>
                         <ManualEntryForm
                           draft={manualDraft}
+                          selectedCustomer={selectedCustomer}
                           onChange={(next) => {
                             setManualDraft(next);
                             setManualData(null);
@@ -3174,6 +3186,16 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: "#fff0d8",
   },
+  manualConfirmedBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: "#eaf7f0",
+  },
+  manualConfirmedCopy: { flex: 1, gap: 1 },
+  manualConfirmedLabel: { color: "#1c7c54" },
   manualHistoryLabel: { color: "#1f5fbf", fontWeight: "700" },
   manualChoiceRow: { flexDirection: "row", gap: 8 },
   manualChoiceButton: { flex: 1, minHeight: 74 },
