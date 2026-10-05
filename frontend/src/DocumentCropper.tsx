@@ -22,7 +22,7 @@ export type CropResult = {
 export type DocumentCropperProps = {
   request: CropRequest;
   onCancel: () => void;
-  onComplete: (result: CropResult) => void;
+  onComplete: (result: CropResult) => void | Promise<void>;
 };
 
 // En web se utiliza el recortador interactivo; en móvil este componente prepara

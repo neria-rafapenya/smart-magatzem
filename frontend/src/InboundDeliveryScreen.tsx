@@ -75,6 +75,13 @@ type SelectedDocument = {
   preview_uri?: string;
 };
 
+type PickedDocumentAsset = {
+  uri: string;
+  name: string;
+  mimeType?: string;
+  base64?: string;
+};
+
 const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
   guided_capture: true,
   quality_gate: true,
@@ -1490,6 +1497,7 @@ export function InboundDeliveryScreen({
   const [captureSettings, setCaptureSettings] = useState<CaptureSettings>(DEFAULT_CAPTURE_SETTINGS);
   const [localQuality, setLocalQuality] = useState<LocalCaptureQuality | null>(null);
   const [cropRequest, setCropRequest] = useState<CropRequest | null>(null);
+  const [pendingCropAssets, setPendingCropAssets] = useState<PickedDocumentAsset[]>([]);
   const [analysis, setAnalysis] = useState<DeliveryNoteAnalysis | null>(null);
   const [manualMode, setManualMode] = useState(false);
   const [manualDraft, setManualDraft] = useState<ManualDocumentDraft>(() =>
@@ -1726,15 +1734,34 @@ export function InboundDeliveryScreen({
       type: ["image/*", "application/pdf", "text/plain"],
       copyToCacheDirectory: true,
       base64: true,
+      multiple: captureSettings.enable_multipage,
     });
     if (result.canceled) return;
-    const asset = result.assets[0];
+    const assets = result.assets as PickedDocumentAsset[];
+    if (captureSettings.enable_multipage && assets.length > 1) {
+      if (assets.some((asset) => !(asset.mimeType ?? "").startsWith("image/"))) {
+        setError("La selección múltiple solo admite imágenes. Añade los PDF individualmente.");
+        return;
+      }
+      const [first, ...remaining] = assets;
+      setPendingCropAssets(remaining);
+      setCropRequest({
+        uri: first.uri,
+        filename: first.name,
+        content_type: first.mimeType ?? "image/jpeg",
+        append,
+      });
+      setQueueNotice(`Se han seleccionado ${assets.length} imágenes. Recortaremos cada hoja antes de añadirla.`);
+      return;
+    }
+    const asset = assets[0];
     const contentType = asset.mimeType ?? "application/octet-stream";
     if (Platform.OS === "web" && contentType.startsWith("image/")) {
       setCropRequest({
         uri: asset.uri,
         filename: asset.name,
         content_type: contentType,
+        append,
       });
       if (append) setQueueNotice("Selecciona el recorte de la nueva hoja para añadirla al documento.");
     } else {
@@ -1864,14 +1891,27 @@ export function InboundDeliveryScreen({
     };
   }, [cameraOpen, cameraReady, capturePhoto]);
 
-  const completeCrop = (result: CropResult) => {
+  const completeCrop = async (result: CropResult) => {
     const next = {
       filename: result.filename,
       content_type: result.content_type,
       content_base64: result.base64,
       preview_uri: result.uri,
     };
-    void setSelectedDocument(next, Boolean(cropRequest?.append));
+    await setSelectedDocument(next, Boolean(cropRequest?.append));
+    const [nextAsset, ...remaining] = pendingCropAssets;
+    if (nextAsset) {
+      setPendingCropAssets(remaining);
+      setCropRequest({
+        uri: nextAsset.uri,
+        filename: nextAsset.name,
+        content_type: nextAsset.mimeType ?? "image/jpeg",
+        append: true,
+      });
+      setQueueNotice(remaining.length > 0 ? `Quedan ${remaining.length} hojas por recortar.` : "Última hoja: confirma el recorte para continuar.");
+      return;
+    }
+    setPendingCropAssets([]);
     setCropRequest(null);
     setAnalysis(null);
     setManualMode(false);
@@ -1880,6 +1920,7 @@ export function InboundDeliveryScreen({
   };
 
   const cancelCrop = () => {
+    setPendingCropAssets([]);
     setCropRequest(null);
     setError(
       "Se ha descartado la imagen. Captura o selecciona otra para continuar.",
