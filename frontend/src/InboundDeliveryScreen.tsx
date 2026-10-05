@@ -1539,6 +1539,7 @@ export function InboundDeliveryScreen({
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState("");
   const [successNotice, setSuccessNotice] = useState(false);
+  const [closeManualAfterSuccess, setCloseManualAfterSuccess] = useState(false);
   const [error, setError] = useState("");
   const [dataLoadError, setDataLoadError] = useState("");
   const [queueNotice, setQueueNotice] = useState("");
@@ -1706,7 +1707,7 @@ export function InboundDeliveryScreen({
 
   useEffect(() => {
     if (!message) return undefined;
-    const timeout = setTimeout(() => setMessage(""), 3000);
+    const timeout = setTimeout(() => setMessage(""), 5000);
     return () => clearTimeout(timeout);
   }, [message]);
 
@@ -2024,6 +2025,7 @@ export function InboundDeliveryScreen({
     setAnalyzing(true);
     setError("");
     setSuccessNotice(false);
+    setCloseManualAfterSuccess(false);
     setShowAnalysisDetails(false);
     try {
       const result = await analyzeDeliveryNote({
@@ -2049,6 +2051,7 @@ export function InboundDeliveryScreen({
       });
       setAnalysis(result);
       setManualData(manualOverride);
+      setCloseManualAfterSuccess(Boolean(manualOverride && result.can_send));
       setMessage(
         result.can_send
           ? "Interpretación correcta. El documento puede enviarse al pipeline."
@@ -2088,6 +2091,11 @@ export function InboundDeliveryScreen({
     if (!data) return;
     await analyzeWithManualData(data);
   };
+
+  const finishManualReview = useCallback(() => {
+    setManualMode(false);
+    setCloseManualAfterSuccess(false);
+  }, []);
 
   const sendToPipeline = async () => {
     if (!documentType) {
@@ -2956,7 +2964,11 @@ export function InboundDeliveryScreen({
           onComplete={completeCrop}
         />
       ) : null}
-      <FeedbackNotice message={message} error={error} />
+      <FeedbackNotice
+        message={message}
+        error={error}
+        onClosed={closeManualAfterSuccess ? finishManualReview : undefined}
+      />
     </View>
   );
 }

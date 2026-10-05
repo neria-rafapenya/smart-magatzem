@@ -3,9 +3,10 @@ import { useEffect } from 'react';
 type FeedbackNoticeProps = {
   message?: string;
   error?: string;
+  onClosed?: () => void;
 };
 
-export function FeedbackNotice({ message, error }: FeedbackNoticeProps) {
+export function FeedbackNotice({ message, error, onClosed }: FeedbackNoticeProps) {
   useEffect(() => {
     const text = error || message;
     if (!text) return;
@@ -22,12 +23,12 @@ export function FeedbackNotice({ message, error }: FeedbackNoticeProps) {
         showConfirmButton: false,
         timer: 4200,
         timerProgressBar: true,
-      });
+      }).then(() => onClosed?.());
     });
     return () => {
       active = false;
     };
-  }, [error, message]);
+  }, [error, message, onClosed]);
 
   return null;
 }
