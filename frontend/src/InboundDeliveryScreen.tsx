@@ -1539,6 +1539,7 @@ export function InboundDeliveryScreen({
   const [sending, setSending] = useState(false);
   const [message, setMessage] = useState("");
   const [successNotice, setSuccessNotice] = useState(false);
+  const [successCountdown, setSuccessCountdown] = useState(0);
   const [closeManualAfterSuccess, setCloseManualAfterSuccess] = useState(false);
   const [error, setError] = useState("");
   const [dataLoadError, setDataLoadError] = useState("");
@@ -2025,6 +2026,7 @@ export function InboundDeliveryScreen({
     setAnalyzing(true);
     setError("");
     setSuccessNotice(false);
+    setSuccessCountdown(0);
     setCloseManualAfterSuccess(false);
     setShowAnalysisDetails(false);
     try {
@@ -2155,9 +2157,11 @@ export function InboundDeliveryScreen({
       if (record.status === "sent_to_erp") {
         setMessage("");
         setSuccessNotice(true);
+        setSuccessCountdown(10);
       } else {
         setMessage("Documento recibido para revisión.");
         setSuccessNotice(false);
+        setSuccessCountdown(0);
       }
       setDocument(null);
       setDocumentPages([]);
@@ -2224,12 +2228,14 @@ export function InboundDeliveryScreen({
     setCameraReady(false);
     setCameraCountdown(null);
     setSuccessNotice(false);
+    setSuccessCountdown(0);
     setMessage("");
     setError("");
   };
 
   const startNextDocument = () => {
     setSuccessNotice(false);
+    setSuccessCountdown(0);
     setMessage("");
     setError("");
     setDocument(null);
@@ -2240,6 +2246,18 @@ export function InboundDeliveryScreen({
     setManualData(null);
     setTimeout(() => wizardScrollRef.current?.scrollTo({ y: 0, animated: true }), 80);
   };
+
+  useEffect(() => {
+    if (!successNotice) return undefined;
+    const interval = setInterval(() => {
+      setSuccessCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+    const timeout = setTimeout(() => resetWizard(), 10000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [successNotice]);
 
   if (loading) {
     return (
@@ -2426,9 +2444,16 @@ export function InboundDeliveryScreen({
                   Se ha enviado al ERP y se ha preparado la copia para el
                   cliente.
                 </Text>
+                <Text variant="bodySmall" style={styles.muted}>
+                  Volviendo al inicio en {successCountdown || 10} segundos.
+                </Text>
                 <AppButton
                   mode="text"
-                  onPress={() => setActiveScreen("processed")}
+                  onPress={() => {
+                    setSuccessNotice(false);
+                    setSuccessCountdown(0);
+                    setActiveScreen("processed");
+                  }}
                 >
                   Ver documentos enviados al ERP
                 </AppButton>
