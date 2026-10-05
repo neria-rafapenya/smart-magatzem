@@ -13,6 +13,54 @@ let authExpiredHandler: (() => void) | null = null;
 
 type Collection<T> = { data: T[] };
 
+function normalizeInterpretation(
+  value: Partial<IntakeRecord['interpretation']> | null | undefined,
+): IntakeRecord['interpretation'] {
+  const interpretation = value ?? {};
+  return {
+    rules_version: interpretation.rules_version ?? '',
+    client_id: interpretation.client_id ?? '',
+    requested_document_type: interpretation.requested_document_type ?? 'auto',
+    document_type: interpretation.document_type ?? 'unknown',
+    document_direction: interpretation.document_direction ?? 'unknown',
+    order_kind: interpretation.order_kind ?? 'unknown',
+    details: interpretation.details ?? {},
+    document_number: interpretation.document_number ?? null,
+    document_customer: interpretation.document_customer ?? { id: null, name: null, tax_id: null },
+    selected_customer: interpretation.selected_customer ?? { id: '', name: null, tax_id: null },
+    customer_match: interpretation.customer_match ?? { status: 'unknown', reason: '' },
+    lines: Array.isArray(interpretation.lines) ? interpretation.lines : [],
+    reasons: Array.isArray(interpretation.reasons) ? interpretation.reasons : [],
+    missing_fields: Array.isArray(interpretation.missing_fields) ? interpretation.missing_fields : [],
+    field_confidence: interpretation.field_confidence ?? {},
+  };
+}
+
+function normalizeIntakeRecord(value: IntakeRecord): IntakeRecord {
+  return {
+    ...value,
+    interpretation: normalizeInterpretation(value.interpretation),
+    ocr: value.ocr ?? { status: 'unknown', text: '' },
+    quality_report: value.quality_report
+      ? {
+          ...value.quality_report,
+          reasons: Array.isArray(value.quality_report.reasons) ? value.quality_report.reasons : [],
+          warnings: Array.isArray(value.quality_report.warnings) ? value.quality_report.warnings : [],
+          blocking_reasons: Array.isArray(value.quality_report.blocking_reasons) ? value.quality_report.blocking_reasons : [],
+        }
+      : value.quality_report,
+  };
+}
+
+function normalizeAnalysis(value: DeliveryNoteAnalysis): DeliveryNoteAnalysis {
+  return {
+    ...value,
+    interpretation: normalizeInterpretation(value.interpretation),
+    missing_fields: Array.isArray(value.missing_fields) ? value.missing_fields : [],
+    ocr: value.ocr ?? { status: 'unknown', text: '' },
+  };
+}
+
 export class ApiError extends Error {
   readonly status: number;
 
@@ -184,7 +232,11 @@ export async function getSuppliers(query = '') {
 }
 
 export async function getIntakeRecords() {
-  return request<Collection<IntakeRecord>>('/api/intake/documents');
+  const response = await request<Collection<IntakeRecord>>('/api/intake/documents');
+  return {
+    ...response,
+    data: Array.isArray(response.data) ? response.data.map(normalizeIntakeRecord) : [],
+  };
 }
 
 export async function getAwsUsage() {
@@ -206,17 +258,19 @@ export type IntakePayload = {
 };
 
 export async function analyzeDeliveryNote(payload: IntakePayload) {
-  return request<DeliveryNoteAnalysis>('/api/intake/documents/analyze', {
+  const response = await request<DeliveryNoteAnalysis>('/api/intake/documents/analyze', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+  return normalizeAnalysis(response);
 }
 
 export async function submitDeliveryNote(payload: IntakePayload) {
-  return request<IntakeRecord>('/api/intake/documents', {
+  const response = await request<IntakeRecord>('/api/intake/documents', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+  return normalizeIntakeRecord(response);
 }
 
 export async function getOrders() {
