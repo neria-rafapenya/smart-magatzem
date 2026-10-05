@@ -908,7 +908,11 @@ class AwsRuntime:
         self.s3.put_object(Bucket=self.bucket, Key=copy_key, Body=content or b"copia del documento", ContentType=str(analysis["content_type"]))
         self.usage(tenant_id, document_id, "S3", "PutObject · copia cliente", requests=1)
         email_delivery: dict[str, object] = {"status": "not_required", "provider": "aws-ses"}
-        if analysis["interpretation"]["document_direction"] == "outbound" and recipient:
+        # During testing, an explicit override must exercise the real SES path even
+        # when OCR has not classified the document direction as outbound yet. In
+        # normal operation (without an override), preserve the outbound-only rule.
+        should_send_email = bool(recipient_override) or analysis["interpretation"]["document_direction"] == "outbound"
+        if should_send_email and recipient:
             sender = os.getenv("SES_FROM_EMAIL", "")
             if sender:
                 self.ses.send_email(
