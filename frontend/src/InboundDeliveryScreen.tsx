@@ -2236,6 +2236,15 @@ export function InboundDeliveryScreen({
               onPress={() => setActiveScreen("processed")}
               accessibilityLabel="Documentos procesados"
             />
+            {Platform.OS === "web" &&
+            (session.user.permissions.includes("*") ||
+              session.user.permissions.includes("tenant.configure")) ? (
+              <AppIconButton
+                icon="cog-outline"
+                onPress={() => setActiveScreen("admin")}
+                accessibilityLabel="Configuración del tenant"
+              />
+            ) : null}
             {documentType || successNotice ? (
               <>
               <AppIconButton
@@ -2868,15 +2877,6 @@ export function InboundDeliveryScreen({
                   </View>
                 </View>
               ) : null}
-            {Platform.OS === "web" &&
-            (session.user.permissions.includes("*") ||
-              session.user.permissions.includes("tenant.configure")) ? (
-              <AppIconButton
-                icon="cog-outline"
-                onPress={() => setActiveScreen("admin")}
-                accessibilityLabel="Configuración de tenant"
-              />
-            ) : null}
             </>
           ) : null}
         </ScrollView>
