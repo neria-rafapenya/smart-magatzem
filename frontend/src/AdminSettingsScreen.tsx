@@ -16,6 +16,7 @@ import {
   saveTenantValidationRules,
   setTenantId,
   testErpConnection,
+  resetProcessedDocuments,
   uploadTenantTemplate,
 } from './api';
 import type { AuthSession, ErpConnection, Tenant, TenantDocumentField, TenantTemplate } from './types';
@@ -42,10 +43,12 @@ export function AdminSettingsScreen({
   session,
   onBack,
   onLogout,
+  onDocumentsReset,
 }: {
   session: AuthSession;
   onBack: () => void;
   onLogout: () => void;
+  onDocumentsReset?: () => Promise<void> | void;
 }) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState(session.user.tenant_id);
@@ -80,6 +83,7 @@ export function AdminSettingsScreen({
   const [templateType, setTemplateType] = useState('order');
   const [testing, setTesting] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [resettingDocuments, setResettingDocuments] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -311,6 +315,37 @@ export function AdminSettingsScreen({
     }
   };
 
+  const resetDocuments = async () => {
+    const { default: Swal } = await import('sweetalert2');
+    const confirmation = await Swal.fire({
+      icon: 'warning',
+      title: '¿Reiniciar documentos de prueba?',
+      html: `Se borrarán los documentos procesados, análisis e imágenes del tenant <strong>${selectedTenantId}</strong>.<br/><br/>La configuración, las plantillas y el consumo se conservarán.`,
+      input: 'text',
+      inputLabel: 'Escribe BORRAR para confirmar',
+      inputPlaceholder: 'BORRAR',
+      showCancelButton: true,
+      confirmButtonText: 'Borrar documentos',
+      cancelButtonText: 'Cancelar',
+      confirmButtonColor: '#b42318',
+      inputValidator: (value) => value === 'BORRAR' ? undefined : 'Escribe BORRAR exactamente para continuar.',
+    });
+    if (!confirmation.isConfirmed) return;
+
+    setResettingDocuments(true);
+    setError('');
+    setMessage('');
+    try {
+      const result = await resetProcessedDocuments();
+      await onDocumentsReset?.();
+      setMessage(`${result.deleted_documents} documentos y ${result.deleted_objects} archivos eliminados del tenant ${result.tenant_id}.`);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setResettingDocuments(false);
+    }
+  };
+
   if (Platform.OS !== 'web') return null;
 
   return (
@@ -474,6 +509,23 @@ export function AdminSettingsScreen({
           </Button>
         </Surface>
 
+        <Surface style={[styles.card, styles.dangerCard]} elevation={1}>
+          <Text variant="headlineSmall">Zona de pruebas</Text>
+          <Text variant="bodyMedium" style={styles.muted}>
+            Reinicia el tenant activo eliminando sus documentos, análisis e imágenes procesadas. La configuración, plantillas y consumo se mantienen.
+          </Text>
+          <Button
+            mode="outlined"
+            icon="delete-sweep-outline"
+            textColor="#b42318"
+            loading={resettingDocuments}
+            disabled={resettingDocuments || !selectedTenantId}
+            onPress={() => { void resetDocuments(); }}
+          >
+            Reiniciar documentos de prueba
+          </Button>
+        </Surface>
+
         <Surface style={styles.card} elevation={1}>
           <Text variant="headlineSmall">Conexión ERP</Text>
           <Text variant="bodyMedium" style={styles.muted}>Tenant activo: {selectedTenantId}</Text>
@@ -517,6 +569,7 @@ const styles = StyleSheet.create({
   headerCopy: { flex: 1 },
   content: { width: '100%', maxWidth: 920, alignSelf: 'center', padding: 24, gap: 18 },
   card: { padding: 22, borderRadius: 16, backgroundColor: '#ffffff', gap: 12 },
+  dangerCard: { borderWidth: 1, borderColor: '#efb0b0' },
   muted: { color: '#53657d' },
   tenantSelector: { alignSelf: 'stretch' },
   tenantSelectorContent: { justifyContent: 'space-between' },

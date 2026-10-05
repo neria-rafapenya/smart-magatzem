@@ -239,6 +239,10 @@ def create_server(
                     )
                     self._send(HTTPStatus.CREATED, template)
                     return
+                if parsed.path == "/api/admin/documents/reset":
+                    identity = self._require_permission("tenant.configure")
+                    self._send(HTTPStatus.OK, intake.reset_documents(identity["tenant_id"]))
+                    return
                 if parsed.path in {"/api/intake/delivery-notes/analyze", "/api/intake/documents/analyze"}:
                     identity = self._require_permission("document.capture")
                     payload["tenant_id"] = identity["tenant_id"]

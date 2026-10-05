@@ -991,6 +991,66 @@ class AwsRuntime:
                 records.append(record)
         return list(reversed(records))
 
+    def reset_documents(self, tenant_id: str) -> dict[str, object]:
+        """Remove document and analysis records plus their S3 objects for one tenant."""
+        items: list[dict[str, object]] = []
+        for prefix in ("DOCUMENT#", "ANALYSIS#"):
+            response = self.table.query(
+                KeyConditionExpression=Key("pk").eq(f"TENANT#{tenant_id}") & Key("sk").begins_with(prefix)
+            )
+            items.extend(response.get("Items", []))
+            while response.get("LastEvaluatedKey"):
+                response = self.table.query(
+                    KeyConditionExpression=Key("pk").eq(f"TENANT#{tenant_id}") & Key("sk").begins_with(prefix),
+                    ExclusiveStartKey=response["LastEvaluatedKey"],
+                )
+                items.extend(response.get("Items", []))
+
+        s3_keys: set[str] = set()
+        document_count = 0
+        analysis_count = 0
+        for item in items:
+            sort_key = str(item.get("sk", ""))
+            if sort_key.startswith("DOCUMENT#"):
+                document_count += 1
+            elif sort_key.startswith("ANALYSIS#"):
+                analysis_count += 1
+            try:
+                record = json.loads(str(item.get("payload", "{}")))
+            except json.JSONDecodeError:
+                record = {}
+            if not isinstance(record, dict):
+                continue
+            source_key = record.get("source_object_key")
+            if source_key:
+                s3_keys.add(str(source_key))
+            page_keys = record.get("source_object_keys", [])
+            for page_key in page_keys if isinstance(page_keys, list) else []:
+                if page_key:
+                    s3_keys.add(str(page_key))
+            client_copy = record.get("client_copy")
+            if isinstance(client_copy, dict) and client_copy.get("object_key"):
+                s3_keys.add(str(client_copy["object_key"]))
+
+        deleted_objects = 0
+        key_list = list(s3_keys)
+        for start in range(0, len(key_list), 1000):
+            batch = [{"Key": key} for key in key_list[start:start + 1000]]
+            if not batch:
+                continue
+            self.s3.delete_objects(Bucket=self.bucket, Delete={"Objects": batch, "Quiet": True})
+            deleted_objects += len(batch)
+        for item in items:
+            self.table.delete_item(Key={"pk": str(item["pk"]), "sk": str(item["sk"])})
+
+        return {
+            "tenant_id": tenant_id,
+            "deleted_documents": document_count,
+            "deleted_analysis": analysis_count,
+            "deleted_objects": deleted_objects,
+            "preserved": ["tenant configuration", "templates", "usage telemetry"],
+        }
+
     def source_url(self, tenant_id: str, document_id: str) -> str | None:
         item = self.table.get_item(Key={"pk": f"TENANT#{tenant_id}", "sk": f"DOCUMENT#{document_id}"}).get("Item")
         if not item:
@@ -1076,6 +1136,10 @@ def handler(event: dict[str, object], _context) -> dict[str, object]:
             return _response(200, {"validation_rules": runtime.validation_rules(str(identity["tenant_id"]))})
         if method == "POST":
             return _response(200, {"validation_rules": runtime.save_validation_rules(str(identity["tenant_id"]), _body(event).get("validation_rules", {}))})
+    if path == "/api/admin/documents/reset" and method == "POST":
+        if "*" not in identity["permissions"]:
+            return _response(403, {"error": "solo un administrador puede reiniciar documentos"})
+        return _response(200, runtime.reset_documents(str(identity["tenant_id"])))
     if path == "/api/customers" and method == "GET":
         query = str((event.get("queryStringParameters") or {}).get("q", ""))
         return _response(200, {"data": _clients(query)})

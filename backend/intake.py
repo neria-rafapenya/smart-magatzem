@@ -80,6 +80,63 @@ class DeliveryNoteIntake:
         records = self.records if not tenant_id else [record for record in self.records if str(record.get("tenant_id", "TEN-LOCAL")) == tenant_id]
         return list(reversed(records))
 
+    def reset_documents(self, tenant_id: str) -> dict[str, object]:
+        """Remove test documents for one tenant, keeping configuration and usage data."""
+        target_records = [
+            record for record in self.records
+            if str(record.get("tenant_id", "TEN-LOCAL")) == tenant_id
+        ]
+        removed_ids = {str(record.get("id")) for record in target_records}
+        deleted_objects = 0
+
+        for record in target_records:
+            keys = set()
+            source_key = record.get("source_object_key")
+            if source_key:
+                keys.add(str(source_key))
+            page_keys = record.get("source_object_keys", [])
+            for page_key in page_keys if isinstance(page_keys, list) else []:
+                if page_key:
+                    keys.add(str(page_key))
+            client_copy = record.get("client_copy")
+            if isinstance(client_copy, dict) and client_copy.get("object_key"):
+                keys.add(str(client_copy["object_key"]))
+            keys.add(f"metadata/{record.get('id')}.json")
+            for key in keys:
+                path = (self.object_store.root / key).resolve()
+                root = self.object_store.root.resolve()
+                if root not in path.parents or not path.is_file():
+                    continue
+                try:
+                    path.unlink()
+                    deleted_objects += 1
+                except OSError:
+                    continue
+
+        analysis_dir = self.object_store.root / "analysis"
+        deleted_analysis = 0
+        for analysis_path in analysis_dir.glob("*.json") if analysis_dir.exists() else []:
+            try:
+                analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(analysis, dict) and str(analysis.get("tenant_id", "")) == tenant_id:
+                try:
+                    analysis_path.unlink()
+                    deleted_objects += 1
+                    deleted_analysis += 1
+                except OSError:
+                    pass
+
+        self.records = [record for record in self.records if str(record.get("id")) not in removed_ids]
+        return {
+            "tenant_id": tenant_id,
+            "deleted_documents": len(target_records),
+            "deleted_analysis": deleted_analysis,
+            "deleted_objects": deleted_objects,
+            "preserved": ["tenant configuration", "templates", "usage telemetry"],
+        }
+
     def get_record(self, record_id: str, tenant_id: str | None = None) -> dict[str, object] | None:
         return next(
             (

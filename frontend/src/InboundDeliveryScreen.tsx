@@ -2283,6 +2283,7 @@ export function InboundDeliveryScreen({
         session={session}
         onBack={() => setActiveScreen("intake")}
         onLogout={onLogout}
+        onDocumentsReset={refresh}
       />
     );
   }

@@ -216,6 +216,19 @@ export async function uploadTenantTemplate(payload: {
   });
 }
 
+export async function resetProcessedDocuments() {
+  return request<{
+    tenant_id: string;
+    deleted_documents: number;
+    deleted_analysis: number;
+    deleted_objects: number;
+    preserved: string[];
+  }>('/api/admin/documents/reset', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 export async function getDeliveryNotes(status?: DeliveryNoteStatus) {
   const query = status ? `?status=${encodeURIComponent(status)}` : '';
   return request<Collection<DeliveryNote>>(`/api/v1/delivery-notes${query}`);
