@@ -20,6 +20,7 @@ export function FeedbackNotice({ message, error, onClosed }: FeedbackNoticeProps
         icon: error ? 'error' : 'success',
         title: error ? 'No se ha podido completar' : 'Operación completada',
         text,
+        showCloseButton: true,
         showConfirmButton: false,
         timer: 4200,
         timerProgressBar: true,

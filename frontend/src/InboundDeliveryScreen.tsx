@@ -26,6 +26,7 @@ import {
   StyleSheet,
   TextInput as NativeTextInput,
   Text as NativeText,
+  TextStyle,
   View,
   ViewStyle,
 } from "react-native";
@@ -51,7 +52,6 @@ import {
   type CropRequest,
   type CropResult,
 } from "./DocumentCropper";
-import { croppedDocumentFilename } from "./documentCropUtils";
 import { compressDocumentForUpload } from "./documentUploadUtils";
 import { inspectLocalImageQuality, type LocalCaptureQuality } from "./localCaptureQuality";
 import { enqueueSubmission, getOfflineQueue, markQueuedSubmissionAttempt, removeQueuedSubmission } from "./offlineQueue";
@@ -68,7 +68,6 @@ import type {
   ManualDocumentData,
 } from "./types";
 import { FeedbackNotice } from "./FeedbackNotice";
-import { OnboardingCoach } from "./OnboardingCoach";
 
 type SelectedDocument = {
   filename: string;
@@ -103,6 +102,8 @@ type LastSelection = {
   customerId: string | null;
 };
 
+type IntakeStep = "customer" | "document" | "review";
+
 const lastSelectionKey = (tenantId: string) => `@smart-magatzem/last-selection/${tenantId}`;
 
 type AppButtonProps = {
@@ -112,6 +113,7 @@ type AppButtonProps = {
   onPress: () => void;
   onPressIn?: () => void;
   contentStyle?: StyleProp<ViewStyle>;
+  labelStyle?: StyleProp<TextStyle>;
 };
 
 function AppButton({
@@ -121,6 +123,7 @@ function AppButton({
   onPress,
   onPressIn,
   contentStyle,
+  labelStyle,
 }: AppButtonProps) {
   const labelColor = mode === "contained" ? "#ffffff" : "#1f5fbf";
   const childNodes = Children.toArray(children);
@@ -132,7 +135,7 @@ function AppButton({
       typeof child === "string" || typeof child === "number" ? (
         <NativeText
           key={`label-${index}`}
-          style={[styles.appButtonLabel, { color: labelColor }]}
+          style={[styles.appButtonLabel, labelStyle, { color: labelColor }]}
         >
           {child}
         </NativeText>
@@ -141,7 +144,9 @@ function AppButton({
       ),
     )
   ) : (
-    <NativeText style={[styles.appButtonLabel, { color: labelColor }]}>
+    <NativeText
+      style={[styles.appButtonLabel, labelStyle, { color: labelColor }]}
+    >
       {children}
     </NativeText>
   );
@@ -512,12 +517,12 @@ function ManualEntryForm({
           </View>
         </>
       ) : null}
-      <View style={styles.manualLinesHeader}>
-        <Text variant="labelLarge" style={styles.fieldLabel}>
-          Líneas *
-        </Text>
-        <AppButton
-          mode="text"
+        <View style={styles.manualLinesHeader}>
+          <Text variant="labelLarge" style={styles.fieldLabel}>
+          Artículos, productos o servicios *
+          </Text>
+          <AppButton
+          mode="outlined"
           onPress={() =>
             onChange({
               ...draft,
@@ -526,7 +531,7 @@ function ManualEntryForm({
           }
         >
           <MaterialCommunityIcons name="plus" size={18} color="#1f5fbf" />
-          Añadir línea
+          Añadir artículo
         </AppButton>
       </View>
       {draft.lines.map((line, index) => (
@@ -535,7 +540,7 @@ function ManualEntryForm({
             style={[styles.nativeInput, styles.manualSkuInput]}
             value={line.sku}
             onChangeText={(value) => updateLine(index, "sku", value)}
-            placeholder="SKU / referencia"
+            placeholder="SKU, referencia o descripción"
             placeholderTextColor="#718096"
           />
           <NativeTextInput
@@ -684,6 +689,52 @@ function PanelHeader({
           {subtitle}
         </Text>
       ) : null}
+    </View>
+  );
+}
+
+function IntakeStepTabs({
+  activeStep,
+  hasCustomer,
+  hasDocument,
+  onChange,
+}: {
+  activeStep: IntakeStep;
+  hasCustomer: boolean;
+  hasDocument: boolean;
+  onChange: (step: IntakeStep) => void;
+}) {
+  const steps: { key: IntakeStep; label: string; icon: keyof typeof MaterialCommunityIcons.glyphMap; enabled: boolean }[] = [
+    { key: "customer", label: "1. Cliente", icon: "account-search-outline", enabled: true },
+    { key: "document", label: "2. Documento", icon: "camera-outline", enabled: hasCustomer },
+    { key: "review", label: "3. Revisión", icon: "file-search-outline", enabled: hasDocument },
+  ];
+  return (
+    <View style={styles.stepTabs} accessibilityRole="tablist">
+      {steps.map((step) => (
+        <Pressable
+          key={step.key}
+          accessibilityRole="tab"
+          accessibilityState={{ selected: activeStep === step.key, disabled: !step.enabled }}
+          disabled={!step.enabled}
+          onPress={() => onChange(step.key)}
+          style={({ pressed }) => [
+            styles.stepTab,
+            activeStep === step.key ? styles.stepTabActive : null,
+            !step.enabled ? styles.stepTabDisabled : null,
+            pressed && step.enabled ? styles.appButtonPressed : null,
+          ]}
+        >
+          <MaterialCommunityIcons
+            name={step.icon}
+            size={20}
+            color={activeStep === step.key ? "#1f5fbf" : step.enabled ? "#53657d" : "#a8b3bf"}
+          />
+          <NativeText style={[styles.stepTabLabel, activeStep === step.key ? styles.stepTabLabelActive : null]}>
+            {step.label}
+          </NativeText>
+        </Pressable>
+      ))}
     </View>
   );
 }
@@ -1496,6 +1547,7 @@ export function InboundDeliveryScreen({
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(
     null,
   );
+  const [activeStep, setActiveStep] = useState<IntakeStep>("customer");
   const [documentType, setDocumentType] = useState<IntakeDocumentType | null>(
     null,
   );
@@ -1521,7 +1573,6 @@ export function InboundDeliveryScreen({
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
-  const [cameraCountdown, setCameraCountdown] = useState<number | null>(null);
   const [torchEnabled, setTorchEnabled] = useState(false);
   const [captureAppend, setCaptureAppend] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -1576,10 +1627,12 @@ export function InboundDeliveryScreen({
     setAnalysis(null);
     setManualMode(false);
     setManualData(null);
+    setActiveStep("customer");
   };
 
   const chooseDocumentType = (type: IntakeDocumentType) => {
     setDocumentType(type);
+    setActiveStep("customer");
     setAnalysis(null);
     setManualMode(false);
     setManualData(null);
@@ -1655,7 +1708,10 @@ export function InboundDeliveryScreen({
         if (value.direction) setDocumentDirection(value.direction);
         const counterparties = value.direction === "inbound" ? suppliers : value.direction === "outbound" ? customers : [...customers, ...suppliers];
         const customer = counterparties.find((item) => item.id === value.customerId);
-        if (customer) setSelectedCustomer(customer);
+        if (customer) {
+          setSelectedCustomer(customer);
+          setActiveStep("document");
+        }
       } catch {
         // Una preferencia corrupta no debe impedir el uso del wizard.
       }
@@ -1736,6 +1792,7 @@ export function InboundDeliveryScreen({
     setDocument(next);
     setLocalQuality(next.preview_uri ? await inspectLocalImageQuality(next.preview_uri) : null);
     resetAfterDocumentSelection();
+    setActiveStep("review");
   };
 
   const addDocumentPage = () => {
@@ -1793,22 +1850,17 @@ export function InboundDeliveryScreen({
   const chooseMobileImage = async (append = false) => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [3, 4],
-      base64: true,
-      quality: 0.9,
+      allowsEditing: false,
+      quality: 1,
     });
     if (result.canceled) return;
     const asset = result.assets[0];
-    if (!asset.base64) {
-      throw new Error("No se ha podido preparar la imagen recortada.");
-    }
-    await setSelectedDocument({
-      filename: croppedDocumentFilename(),
-      content_type: "image/jpeg",
-      content_base64: asset.base64,
-      preview_uri: asset.uri,
-    }, append);
+    setCropRequest({
+      uri: asset.uri,
+      filename: asset.fileName ?? `documento-${Date.now()}.jpg`,
+      content_type: asset.mimeType ?? "image/jpeg",
+      append,
+    });
   };
 
   const choosePdfFile = async () => {
@@ -1828,6 +1880,26 @@ export function InboundDeliveryScreen({
 
   const openCamera = async (append = false) => {
     setCaptureAppend(append);
+    if (Platform.OS !== "web") {
+      try {
+        const result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: false,
+          quality: 1,
+        });
+        if (result.canceled) return;
+        const asset = result.assets[0];
+        setCropRequest({
+          uri: asset.uri,
+          filename: asset.fileName ?? `documento-${Date.now()}.jpg`,
+          content_type: asset.mimeType ?? "image/jpeg",
+          append,
+        });
+      } catch (cause) {
+        setError((cause as Error).message);
+      }
+      return;
+    }
     try {
       const permission = cameraPermission?.granted
         ? cameraPermission
@@ -1840,7 +1912,6 @@ export function InboundDeliveryScreen({
       }
       setError("");
       setCameraReady(false);
-      setCameraCountdown(5);
       setTorchEnabled(captureSettings.torch_default);
       setCameraOpen(true);
     } catch (cause) {
@@ -1851,7 +1922,6 @@ export function InboundDeliveryScreen({
   const closeCamera = useCallback(() => {
     setCameraOpen(false);
     setCameraReady(false);
-    setCameraCountdown(null);
     setTorchEnabled(false);
     setCaptureAppend(false);
   }, []);
@@ -1889,22 +1959,6 @@ export function InboundDeliveryScreen({
       setCapturing(false);
     }
   }, [cameraReady, captureAppend, closeCamera]);
-
-  useEffect(() => {
-    if (!cameraOpen || !cameraReady) return undefined;
-    const countdownTimer = setInterval(() => {
-      setCameraCountdown((current) =>
-        current && current > 1 ? current - 1 : 0,
-      );
-    }, 1000);
-    const captureTimer = setTimeout(() => {
-      void capturePhoto();
-    }, 5000);
-    return () => {
-      clearInterval(countdownTimer);
-      clearTimeout(captureTimer);
-    };
-  }, [cameraOpen, cameraReady, capturePhoto]);
 
   const completeCrop = async (result: CropResult) => {
     const next = {
@@ -2090,6 +2144,12 @@ export function InboundDeliveryScreen({
     setCloseManualAfterSuccess(false);
   }, []);
 
+  const closeFeedback = useCallback(() => {
+    setMessage("");
+    setError("");
+    if (closeManualAfterSuccess) finishManualReview();
+  }, [closeManualAfterSuccess, finishManualReview]);
+
   const sendToPipeline = async () => {
     if (!documentType) {
       setError("Selecciona el tipo de documento.");
@@ -2217,7 +2277,7 @@ export function InboundDeliveryScreen({
     setManualData(null);
     setCameraOpen(false);
     setCameraReady(false);
-    setCameraCountdown(null);
+    setActiveStep("customer");
     setSuccessNotice(false);
     setSuccessCountdown(0);
     setMessage("");
@@ -2235,6 +2295,7 @@ export function InboundDeliveryScreen({
     setAnalysis(null);
     setManualMode(false);
     setManualData(null);
+    setActiveStep("document");
     setTimeout(() => wizardScrollRef.current?.scrollTo({ y: 0, animated: true }), 80);
   };
 
@@ -2377,18 +2438,6 @@ export function InboundDeliveryScreen({
             </View>
           ) : null}
 
-          {!successNotice && documentType ? (
-            <View style={styles.hero}>
-              <Text variant="headlineSmall">
-                Procesar {DOCUMENT_TYPE_LABELS[documentType].toLowerCase()}
-              </Text>
-              <Text variant="bodyMedium" style={styles.muted}>
-                Completa los pasos para guardar, interpretar y enviar el
-                documento al ERP.
-              </Text>
-            </View>
-          ) : null}
-
           {dataLoadError ? (
             <View style={[styles.card, styles.errorCard]}>
               <View style={styles.cardContent}>
@@ -2460,7 +2509,14 @@ export function InboundDeliveryScreen({
 
           {!successNotice && documentType ? (
             <>
-              <View style={[styles.card, styles.customerCard]}>
+              <IntakeStepTabs
+                activeStep={activeStep}
+                hasCustomer={Boolean(selectedCustomer)}
+                hasDocument={Boolean(document)}
+                onChange={setActiveStep}
+              />
+
+              {activeStep === "customer" ? <View style={[styles.card, styles.customerCard]}>
                 <PanelHeader
                   title="1. Cliente"
                   subtitle="Busca por nombre o identificador"
@@ -2555,6 +2611,7 @@ export function InboundDeliveryScreen({
                               key={customer.id}
                               mode="text"
                               contentStyle={styles.suggestionButton}
+                              labelStyle={styles.suggestionLabel}
                               onPressIn={() => {
                                 setSelectedCustomer(customer);
                                 setCustomerQuery("");
@@ -2564,6 +2621,7 @@ export function InboundDeliveryScreen({
                                 setDocumentPages([]);
                                 setLocalQuality(null);
                                 setAnalysis(null);
+                                setActiveStep("document");
                                 if (captureSettings.remember_last_selection) {
                                   void AsyncStorage.setItem(lastSelectionKey(session.user.tenant_id), JSON.stringify({ documentType, direction: documentDirection, customerId: customer.id } satisfies LastSelection));
                                 }
@@ -2580,9 +2638,9 @@ export function InboundDeliveryScreen({
                     ) : null}
                   </View>
                 </View>
-              </View>
+              </View> : null}
 
-              {selectedCustomer ? (
+              {activeStep === "document" && selectedCustomer ? (
                 <View style={styles.card}>
                   <PanelHeader
                     title="2. Documento"
@@ -2627,7 +2685,7 @@ export function InboundDeliveryScreen({
                     <View style={styles.cardContent}>
                       <View style={styles.previewHeading}>
                         <Text variant="bodyMedium" style={styles.previewFilename}>
-                          {documentPages.length > 1 ? `${documentPages.length} hojas seleccionadas` : `Seleccionado: ${document.filename}`}
+                          Vista previa preparada{documentPages.length > 1 ? ` · ${documentPages.length} hojas` : ""}
                         </Text>
                         {captureSettings.enable_multipage ? (
                           <AppIconButton
@@ -2659,7 +2717,7 @@ export function InboundDeliveryScreen({
                 </View>
               ) : null}
 
-              {selectedCustomer && cameraOpen ? (
+              {activeStep === "document" && selectedCustomer && cameraOpen ? (
                 <View style={styles.card}>
                   <PanelHeader
                     title="Cámara"
@@ -2684,15 +2742,9 @@ export function InboundDeliveryScreen({
                         />
                       </View>
                     </CameraView>
-                    <View style={styles.cameraCountdown}>
+                    <View style={styles.cameraCaptureActions}>
                       <Text variant="bodyMedium">
-                        La foto se capturará automáticamente en
-                      </Text>
-                      <Text
-                        variant="displaySmall"
-                        style={styles.countdownNumber}
-                      >
-                        {cameraCountdown ?? 5}
+                        Cuando estés preparado, haz la foto.
                       </Text>
                       <Text variant="bodySmall" style={styles.panelSubtitle}>
                         Coloca el documento dentro del encuadre.
@@ -2700,6 +2752,14 @@ export function InboundDeliveryScreen({
                       <Text variant="bodySmall" style={styles.panelSubtitle}>
                         La comprobación de nitidez e iluminación se hará antes del análisis.
                       </Text>
+                      <AppButton
+                        mode="contained"
+                        onPress={() => { void capturePhoto(); }}
+                        disabled={!cameraReady || capturing}
+                      >
+                        <MaterialCommunityIcons name="camera" size={20} color="#ffffff" />
+                        {capturing ? "Preparando foto…" : "Hacer foto"}
+                      </AppButton>
                     </View>
                   </View>
                   <View style={styles.cardActions}>
@@ -2714,7 +2774,30 @@ export function InboundDeliveryScreen({
                 </View>
               ) : null}
 
-              {document ? (
+              {activeStep === "review" && document ? (
+                <>
+                <View style={styles.card}>
+                  <PanelHeader
+                    title="2. Documento preparado"
+                    subtitle="Comprueba el recorte antes de analizarlo"
+                  />
+                  <View style={styles.cardContent}>
+                    {document.preview_uri ? (
+                      <Image
+                        source={{ uri: document.preview_uri }}
+                        style={styles.documentPreview}
+                        resizeMode="contain"
+                        accessibilityLabel="Previsualización recortada del documento"
+                      />
+                    ) : null}
+                    {captureSettings.enable_multipage ? (
+                      <AppButton mode="outlined" onPress={() => setActiveStep("document")}>
+                        <MaterialCommunityIcons name="layers-plus" size={18} color="#1f5fbf" />
+                        Añadir otra hoja
+                      </AppButton>
+                    ) : null}
+                  </View>
+                </View>
                 <View style={styles.card}>
                   <PanelHeader
                     title="3. Interpretación previa"
@@ -2969,6 +3052,7 @@ export function InboundDeliveryScreen({
                     ) : null}
                   </View>
                 </View>
+                </>
               ) : null}
             </>
           ) : null}
@@ -2984,11 +3068,8 @@ export function InboundDeliveryScreen({
       <FeedbackNotice
         message={message}
         error={error}
-        onClosed={closeManualAfterSuccess ? finishManualReview : undefined}
+        onClosed={closeFeedback}
       />
-      {!successNotice && activeScreen === "intake" ? (
-        <OnboardingCoach session={session} />
-      ) : null}
     </View>
   );
 }
@@ -3083,6 +3164,29 @@ const styles = StyleSheet.create({
   },
   wizardTitle: { color: "#1f3c68" },
   hero: { padding: 20, borderRadius: 16, backgroundColor: "#eaf1ff", gap: 8 },
+  stepTabs: {
+    flexDirection: "row",
+    gap: 8,
+    padding: 6,
+    borderRadius: 12,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#dbe3ef",
+  },
+  stepTab: {
+    flex: 1,
+    minHeight: 52,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+  },
+  stepTabActive: { backgroundColor: "#eaf1ff" },
+  stepTabDisabled: { opacity: 0.55 },
+  stepTabLabel: { color: "#53657d", fontSize: 13, fontWeight: "700" },
+  stepTabLabelActive: { color: "#1f5fbf" },
   endpoint: { color: "#53657d", marginTop: 4 },
   muted: { color: "#5d6b7c" },
   warningText: { color: "#8a4b08" },
@@ -3243,9 +3347,9 @@ const styles = StyleSheet.create({
   },
   manualTwoColumns: { flexDirection: "row", gap: 8 },
   manualHalfInput: { flex: 1 },
-  manualEntryAction: { marginTop: 4, alignItems: "flex-start" },
-  manualEntryButtonContent: { minHeight: 32, paddingHorizontal: 0 },
-  manualEntryButtonLabel: { color: "#64748b", fontSize: 13, fontWeight: "600" },
+  manualEntryAction: { marginTop: 10, alignItems: "stretch" },
+  manualEntryButtonContent: { minHeight: 46, paddingHorizontal: 12 },
+  manualEntryButtonLabel: { color: "#1f5fbf", fontSize: 14, fontWeight: "700" },
   documentSourceOptions: {
     flexDirection: "row",
     gap: 8,
@@ -3290,7 +3394,8 @@ const styles = StyleSheet.create({
     zIndex: 40,
     elevation: 40,
   },
-  suggestionButton: { justifyContent: "flex-start" },
+  suggestionButton: { alignItems: "stretch", justifyContent: "flex-start" },
+  suggestionLabel: { flex: 1, textAlign: "left", fontSize: 18 },
   helperText: { color: "#5d6b7c", marginTop: 6 },
   historySearch: { minHeight: 48, borderWidth: 1, borderColor: "#9bb3d3", borderRadius: 8, paddingHorizontal: 14, backgroundColor: "#ffffff", color: "#1f2937", fontSize: 15, marginTop: 8 },
   historyFilters: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
@@ -3318,8 +3423,7 @@ const styles = StyleSheet.create({
   cameraGuideFrame: { position: "absolute", left: "8%", right: "8%", top: "10%", bottom: "10%", borderWidth: 2, borderColor: "#ffffff", borderRadius: 12, opacity: 0.9 },
   cameraToolbar: { position: "absolute", right: 12, top: 12 },
   cameraToolbarButton: { backgroundColor: "rgba(0,0,0,0.45)" },
-  cameraCountdown: { alignItems: "center", paddingVertical: 12, gap: 4 },
-  countdownNumber: { color: "#1f5fbf", fontWeight: "700" },
+  cameraCaptureActions: { alignItems: "center", paddingVertical: 12, gap: 6 },
   documentPreview: {
     width: "100%",
     height: 280,
