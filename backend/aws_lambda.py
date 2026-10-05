@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import mimetypes
 import os
 import re
 import uuid
@@ -358,7 +359,20 @@ class AwsRuntime:
 
     def templates(self, tenant_id: str) -> list[dict[str, object]]:
         value = self._config_json(tenant_id, "TEMPLATES", [])
-        return [dict(item) for item in value] if isinstance(value, list) and all(isinstance(item, dict) for item in value) else []
+        if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+            return []
+        templates: list[dict[str, object]] = []
+        for item in value:
+            template = dict(item)
+            key = str(template.get("path", ""))
+            if key:
+                template["url"] = self.s3.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.bucket, "Key": key},
+                    ExpiresIn=900,
+                )
+            templates.append(template)
+        return templates
 
     def save_template(self, tenant_id: str, filename: str, content_base64: str, document_type: str) -> dict[str, object]:
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(filename)) or "template.pdf"
@@ -371,10 +385,15 @@ class AwsRuntime:
             raise ValueError("La plantilla supera el límite de 10 MB")
         template_id = f"TPL-{tenant_id}-{uuid.uuid4().hex[:8].upper()}"
         key = f"tenant-config/{tenant_id}/{template_id}-{safe_name}"
-        self.s3.put_object(Bucket=self.bucket, Key=key, Body=content, ContentType="application/pdf")
+        content_type = mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
+        if content_type not in {"application/pdf", "image/jpeg", "image/png", "image/webp", "image/gif"}:
+            content_type = "application/octet-stream"
+        self.s3.put_object(Bucket=self.bucket, Key=key, Body=content, ContentType=content_type)
         template = {"id": template_id, "document_type": document_type or "order", "scope": "general", "filename": safe_name, "path": key, "uploaded_at": _now()}
-        self._put_config_json(tenant_id, "TEMPLATES", [*self.templates(tenant_id), template])
-        return template
+        stored_templates = self._config_json(tenant_id, "TEMPLATES", [])
+        stored_templates = stored_templates if isinstance(stored_templates, list) else []
+        self._put_config_json(tenant_id, "TEMPLATES", [*stored_templates, template])
+        return self.templates(tenant_id)[-1]
 
     def validation_rules(self, tenant_id: str) -> dict[str, object]:
         default = {

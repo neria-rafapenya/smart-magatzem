@@ -83,6 +83,7 @@ export type TenantTemplate = {
   scope: string;
   filename: string;
   path?: string;
+  url?: string;
   uploaded_at?: string;
 };
 

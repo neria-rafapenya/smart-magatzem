@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { createElement, useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { Platform, Image, ScrollView, StyleSheet, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { Button, HelperText, Menu, Surface, Text, TextInput } from 'react-native-paper';
 
 import {
@@ -25,6 +26,15 @@ const AUTH_OPTIONS = [
   { value: 'bearer', label: 'Bearer token' },
   { value: 'basic', label: 'Basic Auth' },
   { value: 'oauth2_client_credentials', label: 'OAuth2' },
+];
+
+const TEMPLATE_OPTIONS = [
+  { value: 'order', label: 'Pedido' },
+  { value: 'delivery_note', label: 'Albarán' },
+  { value: 'packing_list', label: 'Packing list' },
+  { value: 'transport_document', label: 'Transporte' },
+  { value: 'invoice', label: 'Factura' },
+  { value: 'deca', label: 'DeCA' },
 ];
 
 export function AdminSettingsScreen({
@@ -66,6 +76,7 @@ export function AdminSettingsScreen({
   const [saving, setSaving] = useState(false);
   const [savingFields, setSavingFields] = useState(false);
   const [uploadingTemplate, setUploadingTemplate] = useState(false);
+  const [templateType, setTemplateType] = useState('order');
   const [testing, setTesting] = useState(false);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState('');
@@ -198,7 +209,7 @@ export function AdminSettingsScreen({
       const template = await uploadTenantTemplate({
         filename: asset.name,
         content_base64: asset.base64,
-        document_type: 'order',
+        document_type: templateType,
       });
       setTemplates((current) => [...current, template]);
       setMessage('Plantilla cargada correctamente.');
@@ -379,18 +390,37 @@ export function AdminSettingsScreen({
 
         <Surface style={styles.card} elevation={1}>
           <Text variant="headlineSmall">Plantillas documentales</Text>
-          <Text variant="bodyMedium" style={styles.muted}>Plantilla general asociada a este tenant. El PDF adjunto se ha cargado como modelo de pedido.</Text>
+          <Text variant="bodyMedium" style={styles.muted}>Carga una plantilla por tipo de documento. El lector la usará como referencia visual y de campos para este tenant.</Text>
           {templates.map((template) => (
-            <View key={template.id} style={styles.fieldRow}>
+            <View key={template.id} style={styles.templateRow}>
+              <View style={styles.templatePreview}>
+                {template.url && /\.(jpe?g|png|webp|gif)$/i.test(template.filename)
+                  ? <Image source={{ uri: template.url }} style={styles.templateImage} resizeMode="contain" />
+                  : template.url && /\.pdf$/i.test(template.filename)
+                    ? createElement('iframe', { title: `Vista previa ${template.filename}`, src: template.url, style: styles.templateFrame as CSSProperties })
+                    : <MaterialCommunityIcons name="file-document-outline" size={40} color="#53657d" />}
+              </View>
               <View style={styles.fieldCopy}>
                 <Text variant="bodyMedium">{template.filename}</Text>
-                <Text variant="bodySmall" style={styles.muted}>{template.document_type} · {template.scope}</Text>
+                <Text variant="bodySmall" style={styles.muted}>{TEMPLATE_OPTIONS.find((option) => option.value === template.document_type)?.label ?? template.document_type} · {template.scope}</Text>
               </View>
               <Text variant="labelSmall" style={styles.required}>Activa</Text>
             </View>
           ))}
+          <View style={styles.optionGrid}>
+            {TEMPLATE_OPTIONS.map((option) => (
+              <Button
+                key={option.value}
+                mode={templateType === option.value ? 'contained' : 'outlined'}
+                onPress={() => setTemplateType(option.value)}
+                style={styles.optionButton}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </View>
           <Button mode="outlined" icon="file-upload-outline" loading={uploadingTemplate} disabled={uploadingTemplate} onPress={() => { void uploadTemplate(); }}>
-            Cargar otra plantilla PDF
+            Cargar plantilla
           </Button>
         </Surface>
 
@@ -497,6 +527,10 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
   fieldList: { gap: 2 },
   fieldRow: { minHeight: 48, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#e5ebf3', flexDirection: 'row', alignItems: 'center', gap: 12 },
+  templateRow: { minHeight: 170, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e5ebf3', flexDirection: 'row', alignItems: 'center', gap: 14 },
+  templatePreview: { width: 150, height: 150, borderRadius: 10, backgroundColor: '#eef2f7', overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  templateImage: { width: '100%', height: '100%' },
+  templateFrame: { width: '100%', height: '100%', borderWidth: 0, backgroundColor: '#ffffff' },
   fieldCopy: { flex: 1, gap: 2 },
   required: { color: '#1f7a54' },
   inlineFields: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
