@@ -1,12 +1,17 @@
 import type { AuthIdentity, AuthSession, AwsUsageSummary, CaptureSettings, Customer, DeliveryNote, DeliveryNoteAnalysis, DeliveryNoteStatus, DocumentDirection, ErpConnection, IntakeDocumentType, IntakeRecord, ManualDocumentData, Order, Tenant, TenantDocumentConfig, TenantDocumentField, TenantTemplate } from './types';
 import { loginWithCognito } from './cognito';
+import { Platform } from 'react-native';
 
 declare const process: { env: { EXPO_PUBLIC_BACKEND_API_URL?: string; EXPO_PUBLIC_AUTH_PROVIDER?: string } };
 
-// Expo sustituye las referencias directas a EXPO_PUBLIC_* al crear el bundle.
-// No usar una lectura dinamica de globalThis: en Android dejaria la URL localhost.
-export const BACKEND_API_URL = (process.env.EXPO_PUBLIC_BACKEND_API_URL ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
 export const AUTH_PROVIDER = (process.env.EXPO_PUBLIC_AUTH_PROVIDER ?? 'local').toLowerCase();
+// Expo sustituye las referencias directas a EXPO_PUBLIC_* al crear el bundle.
+// Como salvaguarda, el emulador Android local usa la puerta del host aunque
+// Metro haya servido un bundle sin la variable EXPO_PUBLIC_BACKEND_API_URL.
+const defaultBackendUrl = Platform.OS === 'android' && AUTH_PROVIDER === 'local'
+  ? 'http://10.0.2.2:8000'
+  : 'http://127.0.0.1:8000';
+export const BACKEND_API_URL = (process.env.EXPO_PUBLIC_BACKEND_API_URL ?? defaultBackendUrl).replace(/\/$/, '');
 let accessToken: string | null = null;
 let activeTenantId: string | null = null;
 let authExpiredHandler: (() => void) | null = null;
