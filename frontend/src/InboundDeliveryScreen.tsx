@@ -752,12 +752,21 @@ function getAnalysisIssues(analysis: DeliveryNoteAnalysis) {
   const issues: string[] = [];
   const qualityReport = analysis.quality_report;
   const qualityReasons = qualityReport?.reasons ?? [];
+  const isDuplicate = analysis.duplicate_check?.status === "duplicate";
+  if (isDuplicate) {
+    const existingId = analysis.duplicate_check?.existing_record_id;
+    issues.push(
+      existingId
+        ? `Este documento ya se ha procesado anteriormente (${existingId}).`
+        : "Este documento ya se ha procesado anteriormente.",
+    );
+  }
   const qualityNeedsReview =
     qualityReport?.decision === "review" ||
     ["needs_review", "unavailable", "unreadable"].includes(
       qualityReport?.status ?? "",
     );
-  if (qualityNeedsReview) {
+  if (qualityNeedsReview && !isDuplicate) {
     issues.push(
       ...(qualityReasons.length > 0
         ? qualityReasons.map(humanizeQualityReason)
@@ -1499,6 +1508,7 @@ export function InboundDeliveryScreen({
   const [cropRequest, setCropRequest] = useState<CropRequest | null>(null);
   const [pendingCropAssets, setPendingCropAssets] = useState<PickedDocumentAsset[]>([]);
   const [analysis, setAnalysis] = useState<DeliveryNoteAnalysis | null>(null);
+  const analysisIsDuplicate = analysis?.duplicate_check?.status === "duplicate";
   const [manualMode, setManualMode] = useState(false);
   const [manualDraft, setManualDraft] = useState<ManualDocumentDraft>(() =>
     createManualDraft("delivery_note", "auto", null),
@@ -2744,9 +2754,11 @@ export function InboundDeliveryScreen({
                             <View style={styles.analysisGuidance}>
                               <MaterialCommunityIcons
                                 name={
-                                  isAwsVisionUnavailable(analysis)
-                                    ? "cloud-alert-outline"
-                                    : "camera-outline"
+                                  analysisIsDuplicate
+                                    ? "content-duplicate"
+                                    : isAwsVisionUnavailable(analysis)
+                                      ? "cloud-alert-outline"
+                                      : "camera-outline"
                                 }
                                 size={20}
                                 color="#8a4b08"
@@ -2755,7 +2767,9 @@ export function InboundDeliveryScreen({
                                 variant="bodySmall"
                                 style={styles.reviewDisclaimer}
                               >
-                                {isAwsVisionUnavailable(analysis)
+                                {analysisIsDuplicate
+                                  ? "Este documento ya se ha procesado y no se volverá a enviar al ERP. Comprueba el historial si necesitas consultar el resultado."
+                                  : isAwsVisionUnavailable(analysis)
                                   ? "El documento no necesita otra captura. Espera a que AWS habilite el lector IA o utiliza la introducción manual."
                                   : "Vuelve a capturar con buena iluminación, enfoque y el documento completo dentro del encuadre."}
                               </Text>
