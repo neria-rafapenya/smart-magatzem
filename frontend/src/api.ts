@@ -9,6 +9,7 @@ export const BACKEND_API_URL = (process.env.EXPO_PUBLIC_BACKEND_API_URL ?? 'http
 export const AUTH_PROVIDER = (process.env.EXPO_PUBLIC_AUTH_PROVIDER ?? 'local').toLowerCase();
 let accessToken: string | null = null;
 let activeTenantId: string | null = null;
+let authExpiredHandler: (() => void) | null = null;
 
 type Collection<T> = { data: T[] };
 
@@ -35,7 +36,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   const body = await response.json();
   if (!response.ok) {
-    if (response.status === 401) accessToken = null;
+    if (response.status === 401) {
+      accessToken = null;
+      activeTenantId = null;
+      authExpiredHandler?.();
+    }
     throw new ApiError(
       body.error ?? `Error del ERP (${response.status})`,
       response.status,
@@ -52,6 +57,13 @@ export function setTenantId(tenantId: string | null) {
   activeTenantId = tenantId;
 }
 
+export function setAuthExpiredHandler(handler: (() => void) | null) {
+  authExpiredHandler = handler;
+  return () => {
+    if (authExpiredHandler === handler) authExpiredHandler = null;
+  };
+}
+
 export async function login(email: string, password: string) {
   if (AUTH_PROVIDER === 'cognito') {
     const session = await loginWithCognito(email, password);
@@ -63,7 +75,8 @@ export async function login(email: string, password: string) {
     try {
       const currentUser = await getCurrentUser();
       return { ...session, user: currentUser.user };
-    } catch {
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 401) throw cause;
       return session;
     }
   }

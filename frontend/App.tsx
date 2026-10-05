@@ -5,7 +5,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { MD3LightTheme, PaperProvider } from 'react-native-paper';
 
-import { AUTH_PROVIDER, getCurrentUser, setAccessToken, setTenantId } from './src/api';
+import { AUTH_PROVIDER, getCurrentUser, setAccessToken, setAuthExpiredHandler, setTenantId } from './src/api';
 import { clearAuthSession, loadAuthSession, saveAuthSession } from './src/authStorage';
 import { refreshCognitoSession, signOutCognito } from './src/cognito';
 import { InboundDeliveryScreen } from './src/InboundDeliveryScreen';
@@ -17,6 +17,14 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    const clearExpiredSession = () => {
+      setAccessToken(null);
+      setTenantId(null);
+      if (AUTH_PROVIDER === 'cognito') signOutCognito();
+      void clearAuthSession();
+      if (active) setSession(null);
+    };
+    const removeAuthExpiredHandler = setAuthExpiredHandler(clearExpiredSession);
     const restore = async () => {
       const saved = await loadAuthSession();
       if (!saved) {
@@ -45,7 +53,10 @@ export default function App() {
       }
     };
     void restore();
-    return () => { active = false; };
+    return () => {
+      active = false;
+      removeAuthExpiredHandler();
+    };
   }, []);
 
   const handleAuthenticated = async (nextSession: AuthSession) => {
