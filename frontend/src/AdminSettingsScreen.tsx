@@ -43,11 +43,13 @@ export function AdminSettingsScreen({
   session,
   onBack,
   onLogout,
+  onOpenUsage,
   onDocumentsReset,
 }: {
   session: AuthSession;
   onBack: () => void;
   onLogout: () => void;
+  onOpenUsage: () => void;
   onDocumentsReset?: () => Promise<void> | void;
 }) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -396,6 +398,16 @@ export function AdminSettingsScreen({
               />
             ))}
           </Menu>
+        </Surface>
+
+        <Surface style={styles.card} elevation={1}>
+          <Text variant="headlineSmall">Consumo y costes</Text>
+          <Text variant="bodyMedium" style={styles.muted}>
+            Consulta las peticiones, tokens y coste estimado de los servicios AWS del tenant.
+          </Text>
+          <Button mode="outlined" icon="chart-line" onPress={onOpenUsage}>
+            Ver consumo de servicios AWS
+          </Button>
         </Surface>
 
         <Surface style={styles.card} elevation={1}>

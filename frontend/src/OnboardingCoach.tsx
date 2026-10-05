@@ -5,7 +5,15 @@ import { Modal, Pressable, StyleSheet, View } from 'react-native';
 import { Button, Text } from 'react-native-paper';
 import type { AuthSession } from './types';
 
-const ONBOARDING_VERSION = 1;
+// Incrementamos la versión para que los usuarios que probaron la primera
+// implementación vuelvan a ver el tutorial corregido una sola vez.
+const ONBOARDING_VERSION = 2;
+
+const SPOTLIGHTS = [
+  { top: '21%', height: 190 },
+  { top: '43%', height: 220 },
+  { top: '58%', height: 230 },
+] as const;
 
 const STEPS = [
   {
@@ -35,27 +43,29 @@ function onboardingKey(session: AuthSession) {
 export function OnboardingCoach({ session }: { session: AuthSession }) {
   const [visible, setVisible] = useState(false);
   const [step, setStep] = useState(0);
+  const storageKey = onboardingKey(session);
 
   useEffect(() => {
     let active = true;
-    void AsyncStorage.getItem(onboardingKey(session)).then((value) => {
+    void AsyncStorage.getItem(storageKey).then((value) => {
       if (active && value !== 'completed') setVisible(true);
     });
     return () => {
       active = false;
     };
-  }, [session]);
+  }, [storageKey]);
 
   const finish = () => {
     setVisible(false);
-    void AsyncStorage.setItem(onboardingKey(session), 'completed');
+    void AsyncStorage.setItem(storageKey, 'completed');
   };
 
   const current = STEPS[step];
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={finish}>
       <View style={styles.overlay}>
-        <View style={styles.spotlight} />
+        <Pressable accessibilityLabel="Saltar tutorial" onPress={finish} style={styles.dismissArea} />
+        <View style={[styles.spotlight, SPOTLIGHTS[step]]} />
         <View style={styles.tooltip} accessibilityViewIsModal>
           <View style={styles.iconCircle}>
             <MaterialCommunityIcons name={current.icon} size={30} color="#1f5fbf" />
@@ -76,7 +86,6 @@ export function OnboardingCoach({ session }: { session: AuthSession }) {
             </Button>
           </View>
         </View>
-        <Pressable accessibilityLabel="Saltar tutorial" onPress={finish} style={styles.dismissArea} />
       </View>
     </Modal>
   );
@@ -87,18 +96,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.68)',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
     padding: 24,
   },
   spotlight: {
     position: 'absolute',
-    top: '23%',
     width: '88%',
-    height: 180,
     borderRadius: 22,
     borderWidth: 2,
     borderColor: '#8fb7f2',
     backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    zIndex: 0,
   },
   tooltip: {
     width: '100%',
@@ -112,6 +120,7 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
     zIndex: 2,
+    marginBottom: 8,
   },
   iconCircle: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', backgroundColor: '#e8f0ff', marginBottom: 12 },
   stepLabel: { color: '#1f5fbf', marginBottom: 6 },

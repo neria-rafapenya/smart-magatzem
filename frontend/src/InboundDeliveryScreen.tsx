@@ -1055,14 +1055,12 @@ function ProcessedDocumentsScreen({
   refreshing,
   onBack,
   onRefresh,
-  onOpenUsage,
   onLogout,
 }: {
   records: IntakeRecord[];
   refreshing: boolean;
   onBack: () => void;
   onRefresh: () => void;
-  onOpenUsage: () => void;
   onLogout: () => void;
 }) {
   const insets = useSafeAreaInsets();
@@ -1125,14 +1123,6 @@ function ProcessedDocumentsScreen({
             Consulta la interpretación, el envío al ERP y el estado del correo
             simulado al cliente.
           </Text>
-          <AppButton mode="outlined" onPress={onOpenUsage}>
-            <MaterialCommunityIcons
-              name="chart-line"
-              size={18}
-              color="#1f5fbf"
-            />
-            Ver consumo de servicios AWS
-          </AppButton>
           <NativeTextInput
             style={styles.historySearch}
             value={historyQuery}
@@ -2281,7 +2271,6 @@ export function InboundDeliveryScreen({
         refreshing={refreshing}
         onBack={resetWizard}
         onRefresh={refresh}
-        onOpenUsage={() => setActiveScreen("usage")}
         onLogout={onLogout}
       />
     );
@@ -2290,7 +2279,7 @@ export function InboundDeliveryScreen({
   if (activeScreen === "usage") {
     return (
       <UsageScreen
-        onBack={() => setActiveScreen("processed")}
+        onBack={() => setActiveScreen("admin")}
         onLogout={onLogout}
       />
     );
@@ -2302,6 +2291,7 @@ export function InboundDeliveryScreen({
         session={session}
         onBack={() => setActiveScreen("intake")}
         onLogout={onLogout}
+        onOpenUsage={() => setActiveScreen("usage")}
         onDocumentsReset={refresh}
       />
     );
@@ -2996,7 +2986,7 @@ export function InboundDeliveryScreen({
         error={error}
         onClosed={closeManualAfterSuccess ? finishManualReview : undefined}
       />
-      {!documentType && !successNotice && activeScreen === "intake" ? (
+      {!successNotice && activeScreen === "intake" ? (
         <OnboardingCoach session={session} />
       ) : null}
     </View>
