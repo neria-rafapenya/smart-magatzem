@@ -27,6 +27,25 @@ from .pricing import annotate_event, pricing_config, sum_token_cost
 
 MAX_PERSISTED_IMAGE_BYTES = 2 * 1024 * 1024
 
+AWS_DEFAULT_FIELDS: list[dict[str, object]] = [
+    {"key": "document_number", "label": "Número de documento", "type": "text", "required": True, "source": "header"},
+    {"key": "document_date", "label": "Fecha", "type": "date", "required": True, "source": "header"},
+    {"key": "expected_delivery_date", "label": "Entrega prevista", "type": "date", "required": False, "source": "header"},
+    {"key": "document_direction", "label": "Dirección", "type": "enum", "required": True, "values": ["inbound", "outbound"], "source": "header"},
+    {"key": "counterparty_name", "label": "Cliente / proveedor", "type": "text", "required": True, "source": "counterparty"},
+    {"key": "counterparty_tax_id", "label": "ID / CIF", "type": "text", "required": False, "source": "counterparty"},
+    {"key": "counterparty_email", "label": "Email", "type": "email", "required": False, "source": "counterparty"},
+    {"key": "counterparty_address", "label": "Dirección del cliente/proveedor", "type": "text", "required": False, "source": "counterparty"},
+    {"key": "lines.sku", "label": "SKU", "type": "text", "required": True, "repeatable": True, "source": "line"},
+    {"key": "lines.description", "label": "Descripción", "type": "text", "required": False, "repeatable": True, "source": "line"},
+    {"key": "lines.quantity", "label": "Cantidad", "type": "number", "required": True, "repeatable": True, "source": "line"},
+    {"key": "lines.unit", "label": "Unidad", "type": "text", "required": False, "repeatable": True, "source": "line"},
+    {"key": "lines.observations", "label": "Observaciones de línea", "type": "text", "required": False, "repeatable": True, "source": "line"},
+    {"key": "notes", "label": "Observaciones y condiciones", "type": "text", "required": False, "source": "footer"},
+    {"key": "signatures.counterparty", "label": "Firma cliente / proveedor", "type": "signature", "required": False, "source": "footer"},
+    {"key": "signatures.company", "label": "Firma Smart Magatzem", "type": "signature", "required": False, "source": "footer"},
+]
+
 
 def _response(status: int, body: dict[str, object]) -> dict[str, object]:
     return {
@@ -89,6 +108,28 @@ def _identity(event: dict[str, object]) -> dict[str, object]:
         "roles": groups,
         "permissions": ["*"] if "admin" in groups else ["document.read"],
     }
+
+
+def _requested_identity(event: dict[str, object], identity: dict[str, object]) -> dict[str, object]:
+    """Aplica el tenant solicitado solo si el usuario tiene una membresía AWS."""
+    headers = event.get("headers") or {}
+    normalized = {str(key).lower(): str(value) for key, value in headers.items()} if isinstance(headers, dict) else {}
+    requested = normalized.get("x-tenant-id", "").strip()
+    current = str(identity["tenant_id"])
+    if not requested or requested == current:
+        return identity
+    user_id = str(identity.get("user_id", ""))
+    table_name = os.getenv("CORE_TABLE")
+    if not user_id or not table_name:
+        raise PermissionError("no tienes acceso a ese tenant")
+    table = boto3.resource("dynamodb", region_name=os.getenv("AWS_REGION", "eu-west-1")).Table(table_name)
+    memberships = table.query(
+        KeyConditionExpression=Key("pk").eq(f"USER#{user_id}") & Key("sk").begins_with("MEMBERSHIP#")
+    ).get("Items", [])
+    allowed = {str(item.get("tenant_id", "")) for item in memberships}
+    if requested not in allowed:
+        raise PermissionError("no tienes acceso a ese tenant")
+    return {**identity, "tenant_id": requested}
 
 
 def _body(event: dict[str, object]) -> dict[str, object]:
@@ -177,6 +218,163 @@ class AwsRuntime:
         self.bedrock = boto3.client("bedrock-runtime", region_name=self.region)
         self.ses = boto3.client("ses", region_name=self.region)
         self.vision_issue = ""
+
+    @staticmethod
+    def _tenant_name(tenant_id: str) -> str:
+        return "Smart Magatzem Demo" if tenant_id == "TEN-DEMO" else tenant_id
+
+    def _tenant_metadata(self, tenant_id: str) -> dict[str, object]:
+        item = self.table.get_item(Key={"pk": f"TENANT#{tenant_id}", "sk": "META"}).get("Item")
+        if item:
+            return {
+                "id": str(item.get("id", tenant_id)),
+                "name": str(item.get("name", self._tenant_name(tenant_id))),
+                "status": str(item.get("status", "active")),
+            }
+        return {"id": tenant_id, "name": self._tenant_name(tenant_id), "status": "active"}
+
+    def list_tenants(self, user_id: str, current_tenant_id: str) -> list[dict[str, object]]:
+        memberships = self.table.query(
+            KeyConditionExpression=Key("pk").eq(f"USER#{user_id}") & Key("sk").begins_with("MEMBERSHIP#")
+        ).get("Items", [])
+        tenant_ids = {str(item.get("tenant_id", "")) for item in memberships if item.get("tenant_id")}
+        tenant_ids.add(current_tenant_id)
+        return [self._tenant_metadata(tenant_id) for tenant_id in sorted(tenant_ids)]
+
+    def create_tenant(self, user_id: str, tenant_id: str, name: str) -> dict[str, object]:
+        tenant_id = tenant_id.strip().upper()
+        name = name.strip()
+        if not tenant_id or not name:
+            raise ValueError("El identificador y el nombre del tenant son obligatorios")
+        if not re.fullmatch(r"[A-Z][A-Z0-9_-]{0,63}", tenant_id):
+            raise ValueError("El identificador del tenant solo puede contener letras, números, guiones y guiones bajos")
+        try:
+            self.table.put_item(
+                Item={"pk": f"TENANT#{tenant_id}", "sk": "META", "id": tenant_id, "name": name, "status": "active"},
+                ConditionExpression="attribute_not_exists(pk)",
+            )
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                raise ValueError("El tenant ya existe") from error
+            raise
+        self.table.put_item(
+            Item={
+                "pk": f"USER#{user_id}",
+                "sk": f"MEMBERSHIP#{tenant_id}",
+                "tenant_id": tenant_id,
+                "role": "admin",
+            }
+        )
+        return {"id": tenant_id, "name": name, "status": "active"}
+
+    def _config_json(self, tenant_id: str, config_name: str, default: object) -> object:
+        item = self.table.get_item(Key={"pk": f"TENANT#{tenant_id}", "sk": f"CONFIG#{config_name}"}).get("Item")
+        if not item:
+            return json.loads(json.dumps(default))
+        try:
+            value = json.loads(str(item.get("payload", "")))
+        except json.JSONDecodeError:
+            return json.loads(json.dumps(default))
+        return value
+
+    def _put_config_json(self, tenant_id: str, config_name: str, value: object) -> object:
+        self.table.put_item(Item={
+            "pk": f"TENANT#{tenant_id}",
+            "sk": f"CONFIG#{config_name}",
+            "payload": json.dumps(value, ensure_ascii=False),
+            "updated_at": _now(),
+        })
+        return value
+
+    def document_fields(self, tenant_id: str) -> list[dict[str, object]]:
+        value = self._config_json(tenant_id, "FIELDS", AWS_DEFAULT_FIELDS)
+        return [dict(item) for item in value] if isinstance(value, list) and all(isinstance(item, dict) for item in value) else list(AWS_DEFAULT_FIELDS)
+
+    def save_document_fields(self, tenant_id: str, fields: object) -> list[dict[str, object]]:
+        if not isinstance(fields, list):
+            raise ValueError("fields debe ser una lista de campos")
+        cleaned: list[dict[str, object]] = []
+        for item in fields:
+            if not isinstance(item, dict):
+                raise ValueError("Cada campo debe ser un objeto")
+            key = str(item.get("key", "")).strip()
+            label = str(item.get("label", "")).strip()
+            if not key or not label or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", key):
+                raise ValueError("Cada campo necesita una clave y un nombre válidos")
+            cleaned.append({**item, "key": key, "label": label, "required": bool(item.get("required", False))})
+        return self._put_config_json(tenant_id, "FIELDS", cleaned)
+
+    def erp_connection(self, tenant_id: str) -> dict[str, object]:
+        value = self._config_json(tenant_id, "ERP", {
+            "provider": "mock_erp", "base_url": "http://127.0.0.1:9000", "auth_type": "none",
+            "username": "", "secret": "", "status": "configured", "last_checked_at": None,
+        })
+        value = value if isinstance(value, dict) else {}
+        return {
+            "tenant_id": tenant_id,
+            "provider": str(value.get("provider", "mock_erp")),
+            "base_url": str(value.get("base_url", "")),
+            "auth_type": str(value.get("auth_type", "none")),
+            "username": str(value.get("username", "")),
+            "secret_configured": bool(value.get("secret", "")),
+            "status": str(value.get("status", "not_configured")),
+            "last_checked_at": value.get("last_checked_at"),
+            "updated_at": value.get("updated_at"),
+        }
+
+    def save_erp_connection(self, tenant_id: str, payload: dict[str, object]) -> dict[str, object]:
+        provider = str(payload.get("provider", "generic_rest")).strip().lower() or "generic_rest"
+        auth_type = str(payload.get("auth_type", "api_key")).strip().lower() or "api_key"
+        base_url = str(payload.get("base_url", "")).strip().rstrip("/")
+        if not base_url:
+            raise ValueError("El endpoint del ERP es obligatorio")
+        if provider not in {"mock_erp", "generic_rest"}:
+            raise ValueError("Proveedor ERP no soportado")
+        if auth_type not in {"none", "api_key", "bearer", "basic", "oauth2_client_credentials"}:
+            raise ValueError("Tipo de autenticación no soportado")
+        previous = self._config_json(tenant_id, "ERP", {})
+        previous = previous if isinstance(previous, dict) else {}
+        saved = {
+            "provider": provider,
+            "base_url": base_url,
+            "auth_type": auth_type,
+            "username": str(payload.get("username", "")).strip(),
+            "secret": str(payload.get("secret", "")) or str(previous.get("secret", "")),
+            "status": "saved",
+            "last_checked_at": previous.get("last_checked_at"),
+            "updated_at": _now(),
+        }
+        self._put_config_json(tenant_id, "ERP", saved)
+        return self.erp_connection(tenant_id)
+
+    def mark_erp_check(self, tenant_id: str, status: str) -> dict[str, object]:
+        current = self._config_json(tenant_id, "ERP", {})
+        if not isinstance(current, dict) or not current.get("base_url"):
+            raise ValueError("Primero guarda la conexión del ERP")
+        current["status"] = status
+        current["last_checked_at"] = _now()
+        self._put_config_json(tenant_id, "ERP", current)
+        return self.erp_connection(tenant_id)
+
+    def templates(self, tenant_id: str) -> list[dict[str, object]]:
+        value = self._config_json(tenant_id, "TEMPLATES", [])
+        return [dict(item) for item in value] if isinstance(value, list) and all(isinstance(item, dict) for item in value) else []
+
+    def save_template(self, tenant_id: str, filename: str, content_base64: str, document_type: str) -> dict[str, object]:
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(filename)) or "template.pdf"
+        encoded = content_base64.split(",", 1)[-1]
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise ValueError("El contenido de la plantilla no es válido") from error
+        if len(content) > 10 * 1024 * 1024:
+            raise ValueError("La plantilla supera el límite de 10 MB")
+        template_id = f"TPL-{tenant_id}-{uuid.uuid4().hex[:8].upper()}"
+        key = f"tenant-config/{tenant_id}/{template_id}-{safe_name}"
+        self.s3.put_object(Bucket=self.bucket, Key=key, Body=content, ContentType="application/pdf")
+        template = {"id": template_id, "document_type": document_type or "order", "scope": "general", "filename": safe_name, "path": key, "uploaded_at": _now()}
+        self._put_config_json(tenant_id, "TEMPLATES", [*self.templates(tenant_id), template])
+        return template
 
     def validation_rules(self, tenant_id: str) -> dict[str, object]:
         default = {
@@ -789,12 +987,53 @@ def handler(event: dict[str, object], _context) -> dict[str, object]:
     method = str(event.get("requestContext", {}).get("http", {}).get("method", "GET")) if isinstance(event.get("requestContext"), dict) else "GET"
     if method == "OPTIONS":
         return _response(204, {})
-    identity = _identity(event)
+    try:
+        identity = _requested_identity(event, _identity(event))
+    except PermissionError as error:
+        return _response(403, {"error": str(error)})
     if path == "/health":
         return _response(200, {"status": "ok", "service": "smart-magatzem-aws", "ai_provider": "aws", "auth_provider": "cognito"})
     runtime = AwsRuntime()
     if path == "/api/auth/me" and method == "GET":
         return _response(200, {"user": identity})
+    if path == "/api/tenants":
+        if "*" not in identity["permissions"]:
+            return _response(403, {"error": "solo un administrador puede gestionar tenants"})
+        if method == "GET":
+            return _response(200, {"data": runtime.list_tenants(str(identity["user_id"]), str(identity["tenant_id"]))})
+        if method == "POST":
+            payload = _body(event)
+            return _response(201, runtime.create_tenant(str(identity["user_id"]), str(payload.get("id", "")), str(payload.get("name", ""))))
+    if path == "/api/admin/erp-connection":
+        if "*" not in identity["permissions"]:
+            return _response(403, {"error": "solo un administrador puede cambiar la conexión ERP"})
+        if method == "GET":
+            return _response(200, runtime.erp_connection(str(identity["tenant_id"])))
+        if method == "POST":
+            return _response(200, runtime.save_erp_connection(str(identity["tenant_id"]), _body(event)))
+    if path == "/api/admin/erp-connection/test" and method == "POST":
+        if "*" not in identity["permissions"]:
+            return _response(403, {"error": "solo un administrador puede probar la conexión ERP"})
+        return _response(200, {"status": "configured", "connection": runtime.mark_erp_check(str(identity["tenant_id"]), "connected"), "response": {"mode": "aws-demo"}})
+    if path == "/api/admin/document-config" and method == "GET":
+        if "*" not in identity["permissions"]:
+            return _response(403, {"error": "solo un administrador puede consultar la configuración"})
+        return _response(200, {
+            "tenant_id": identity["tenant_id"],
+            "fields": runtime.document_fields(str(identity["tenant_id"])),
+            "templates": runtime.templates(str(identity["tenant_id"])),
+            "validation_rules": runtime.validation_rules(str(identity["tenant_id"])),
+            "capture_settings": runtime.capture_settings(str(identity["tenant_id"])),
+        })
+    if path == "/api/admin/document-config/fields" and method == "POST":
+        if "*" not in identity["permissions"]:
+            return _response(403, {"error": "solo un administrador puede cambiar los campos"})
+        return _response(200, {"fields": runtime.save_document_fields(str(identity["tenant_id"]), _body(event).get("fields"))})
+    if path == "/api/admin/document-config/templates" and method == "POST":
+        if "*" not in identity["permissions"]:
+            return _response(403, {"error": "solo un administrador puede cargar plantillas"})
+        payload = _body(event)
+        return _response(201, runtime.save_template(str(identity["tenant_id"]), str(payload.get("filename", "")), str(payload.get("content_base64", "")), str(payload.get("document_type", "order"))))
     if path == "/api/tenant/capture-settings" and method == "GET":
         return _response(200, {
             "tenant_id": identity["tenant_id"],
