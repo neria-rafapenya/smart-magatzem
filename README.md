@@ -199,6 +199,8 @@ La pantalla de configuración aparece con el icono de ajustes de la cabecera y p
 - editar los campos del documento que acepta el ERP;
 - cargar plantillas PDF generales por tenant.
 - configurar tolerancias de cantidad/precio, política de duplicados y subida multipágina.
+- configurar captura guiada, linterna inicial, cola offline, modo ráfaga, memoria de la
+  última selección y umbral de confianza de lectura.
 
 El usuario operario no puede acceder a esta pantalla aunque conozca la ruta o intente
 llamar directamente a la API. La autorización se comprueba en backend mediante el
@@ -217,7 +219,20 @@ CIF, email, dirección, SKU, descripción, cantidad, unidad, observaciones y fir
 La subida multipágina está desactivada por defecto para evitar consumo accidental. Se
 activa por tenant desde la pantalla de configuración o, para una prueba local puntual,
 con `ENABLE_BATCH_DOCUMENTS=1`. El contrato acepta `pages: [{filename, content_type,
-content_base64}]` y limita el número de páginas configurado.
+content_base64}]` y limita el número de páginas configurado. La aplicación muestra un
+marco de captura, permite activar la linterna, comprueba localmente iluminación/nitidez,
+recorta la imagen y puede añadir varias hojas al mismo documento.
+
+La configuración de captura se consulta con `GET /api/tenant/capture-settings` y solo un
+administrador puede modificarla mediante `POST /api/admin/document-config/capture-settings`.
+Las preferencias de cliente, tipo y dirección se guardan separadas por usuario y tenant.
+Si se pierde la conexión al enviar un documento, la app lo conserva temporalmente en una
+cola local y lo reintenta cuando vuelve la conectividad. El runtime Cognito renueva la
+sesión antes de restaurarla para evitar caducidades durante un turno.
+
+La interpretación incluye una confianza estimada por campo. La pantalla destaca los
+campos dudosos y permite abrir los detalles de lectura antes del envío. El historial
+incluye búsqueda y filtros por hoy, pendientes y errores.
 
 También se puede crear un tenant mediante API, siempre autenticado como administrador:
 

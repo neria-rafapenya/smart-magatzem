@@ -6,9 +6,11 @@ import { Button, HelperText, Surface, Text, TextInput } from 'react-native-paper
 import {
   createTenant,
   getErpConnection,
+  getCaptureSettings,
   getTenantDocumentConfig,
   getTenants,
   saveErpConnection,
+  saveCaptureSettings,
   saveTenantDocumentFields,
   saveTenantValidationRules,
   setTenantId,
@@ -43,6 +45,12 @@ export function AdminSettingsScreen({
   const [priceTolerance, setPriceTolerance] = useState('0');
   const [batchEnabled, setBatchEnabled] = useState(false);
   const [maxPages, setMaxPages] = useState('20');
+  const [guidedCapture, setGuidedCapture] = useState(true);
+  const [torchDefault, setTorchDefault] = useState(false);
+  const [offlineQueue, setOfflineQueue] = useState(true);
+  const [rememberLastSelection, setRememberLastSelection] = useState(true);
+  const [burstEnabled, setBurstEnabled] = useState(false);
+  const [confidenceThreshold, setConfidenceThreshold] = useState('0.85');
   const [provider, setProvider] = useState('mock_erp');
   const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:9000');
   const [authType, setAuthType] = useState('none');
@@ -66,6 +74,7 @@ export function AdminSettingsScreen({
     setTenantId(nextTenantId);
     const value = await getErpConnection();
     const documentConfig = await getTenantDocumentConfig();
+    const captureResponse = await getCaptureSettings();
     setConnection(value);
     setFields(documentConfig.fields);
     setTemplates(documentConfig.templates);
@@ -76,6 +85,13 @@ export function AdminSettingsScreen({
     setPriceTolerance(String(invoiceRule?.price_tolerance_percent ?? 0));
     setBatchEnabled(Boolean(rules.enable_batch_documents));
     setMaxPages(String(rules.max_pages_per_document ?? 20));
+    const capture = captureResponse.capture_settings;
+    setGuidedCapture(Boolean(capture.guided_capture));
+    setTorchDefault(Boolean(capture.torch_default));
+    setOfflineQueue(Boolean(capture.offline_queue));
+    setRememberLastSelection(Boolean(capture.remember_last_selection));
+    setBurstEnabled(Boolean(capture.enable_burst));
+    setConfidenceThreshold(String(capture.confidence_threshold ?? 0.85));
     setProvider(value.provider);
     setBaseUrl(value.base_url);
     setAuthType(value.auth_type);
@@ -219,6 +235,35 @@ export function AdminSettingsScreen({
     }
   };
 
+  const saveCaptureConfiguration = async () => {
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const threshold = Number(confidenceThreshold.replace(',', '.'));
+      if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+        throw new Error('El umbral de confianza debe estar entre 0 y 1.');
+      }
+      await saveCaptureSettings({
+        guided_capture: guidedCapture,
+        quality_gate: true,
+        torch_default: torchDefault,
+        enable_multipage: batchEnabled,
+        enable_burst: burstEnabled,
+        max_pages_per_document: Number.parseInt(maxPages, 10),
+        max_file_size_mb: 2,
+        remember_last_selection: rememberLastSelection,
+        offline_queue: offlineQueue,
+        confidence_threshold: threshold,
+      });
+      setMessage('Configuración de captura guardada correctamente.');
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const checkConnection = async () => {
     setTesting(true);
     setError('');
@@ -342,6 +387,30 @@ export function AdminSettingsScreen({
           </Button>
           <Button mode="contained" icon="content-save" loading={saving} disabled={saving} onPress={() => { void saveValidationRules(); }}>
             Guardar validaciones
+          </Button>
+        </Surface>
+
+        <Surface style={styles.card} elevation={1}>
+          <Text variant="headlineSmall">Captura y operación móvil</Text>
+          <Text variant="bodyMedium" style={styles.muted}>Estas preferencias se aplican solo al tenant seleccionado y no cambian las reglas del ERP.</Text>
+          <Button mode={guidedCapture ? 'contained' : 'outlined'} icon="scan-helper" onPress={() => setGuidedCapture((value) => !value)}>
+            {guidedCapture ? 'Captura guiada activa' : 'Activar captura guiada'}
+          </Button>
+          <Button mode={torchDefault ? 'contained' : 'outlined'} icon="flash-outline" onPress={() => setTorchDefault((value) => !value)}>
+            {torchDefault ? 'Linterna inicial activa' : 'Activar linterna inicial'}
+          </Button>
+          <Button mode={offlineQueue ? 'contained' : 'outlined'} icon="cloud-sync-outline" onPress={() => setOfflineQueue((value) => !value)}>
+            {offlineQueue ? 'Cola offline activa' : 'Activar cola offline'}
+          </Button>
+          <Button mode={rememberLastSelection ? 'contained' : 'outlined'} icon="history" onPress={() => setRememberLastSelection((value) => !value)}>
+            {rememberLastSelection ? 'Recordar última selección' : 'No recordar selección'}
+          </Button>
+          <Button mode={burstEnabled ? 'contained' : 'outlined'} icon="camera-multiple-outline" onPress={() => setBurstEnabled((value) => !value)}>
+            {burstEnabled ? 'Modo ráfaga activo' : 'Activar modo ráfaga'}
+          </Button>
+          <TextInput label="Umbral de confianza (0–1)" value={confidenceThreshold} onChangeText={setConfidenceThreshold} keyboardType="decimal-pad" mode="outlined" style={styles.input} />
+          <Button mode="contained" icon="content-save" loading={saving} disabled={saving} onPress={() => { void saveCaptureConfiguration(); }}>
+            Guardar captura
           </Button>
         </Surface>
 

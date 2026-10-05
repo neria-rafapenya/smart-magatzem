@@ -651,6 +651,7 @@ class DeliveryNoteIntake:
             },
             "customer_match": {"status": "matched", "reason": "cliente confirmado manualmente por el operador"},
             "lines": lines,
+            "field_confidence": {"document_number": 1.0, "document_type": 1.0, "document_direction": 1.0, "customer": 1.0, "lines": 1.0},
             "reasons": reasons,
             "missing_fields": missing_fields,
         }
@@ -864,6 +865,13 @@ class DeliveryNoteIntake:
             },
             "customer_match": customer_match,
             "lines": lines,
+            "field_confidence": {
+                "document_number": 0.96 if document_match else 0.0,
+                "document_type": 0.94 if document_type != "unknown" else 0.0,
+                "document_direction": 0.92 if document_direction != "unknown" else 0.0,
+                "customer": 0.97 if customer_match["status"] == "matched" else 0.35 if customer_match["status"] == "unknown" else 0.12,
+                "lines": 0.9 if lines else 0.0,
+            },
             "reasons": reasons,
             "missing_fields": missing_fields,
         }

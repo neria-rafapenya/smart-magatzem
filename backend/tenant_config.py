@@ -68,6 +68,19 @@ class LocalTenantConfigStore:
         "deca_native_required": True,
     }
 
+    DEFAULT_CAPTURE_SETTINGS: dict[str, object] = {
+        "guided_capture": True,
+        "quality_gate": True,
+        "torch_default": False,
+        "enable_multipage": False,
+        "enable_burst": False,
+        "max_pages_per_document": 20,
+        "max_file_size_mb": 2,
+        "remember_last_selection": True,
+        "offline_queue": True,
+        "confidence_threshold": 0.85,
+    }
+
     def _read(self) -> dict[str, object]:
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
@@ -96,6 +109,9 @@ class LocalTenantConfigStore:
                 changed = True
             if "validation_rules" not in entry:
                 entry["validation_rules"] = self.DEFAULT_VALIDATION_RULES
+                changed = True
+            if "capture_settings" not in entry:
+                entry["capture_settings"] = self.DEFAULT_CAPTURE_SETTINGS
                 changed = True
             if "erp_connection" not in entry:
                 legacy_connection = {
@@ -243,6 +259,56 @@ class LocalTenantConfigStore:
                 else:
                     merged[key] = value
             return merged
+
+    def get_capture_settings(self, tenant_id: str) -> dict[str, object]:
+        with self.lock:
+            entry = self._read().get(tenant_id, {})
+            configured = entry.get("capture_settings") if isinstance(entry, dict) else None
+            merged = json.loads(json.dumps(self.DEFAULT_CAPTURE_SETTINGS))
+            if isinstance(configured, dict):
+                merged.update(configured)
+            return merged
+
+    def save_capture_settings(self, tenant_id: str, settings: object) -> dict[str, object]:
+        if not isinstance(settings, dict):
+            raise TenantConfigError("capture_settings debe ser un objeto")
+        merged = self.get_capture_settings(tenant_id)
+        boolean_keys = {
+            "guided_capture", "quality_gate", "torch_default", "enable_multipage",
+            "enable_burst", "remember_last_selection", "offline_queue",
+        }
+        for key in boolean_keys:
+            if key in settings:
+                merged[key] = bool(settings[key])
+        for key, minimum, maximum in (
+            ("max_pages_per_document", 1, 100),
+            ("max_file_size_mb", 1, 20),
+        ):
+            if key in settings:
+                try:
+                    value = int(settings[key])
+                except (TypeError, ValueError) as error:
+                    raise TenantConfigError(f"{key} debe ser entero") from error
+                if value < minimum or value > maximum:
+                    raise TenantConfigError(f"{key} debe estar entre {minimum} y {maximum}")
+                merged[key] = value
+        if "confidence_threshold" in settings:
+            try:
+                threshold = float(settings["confidence_threshold"])
+            except (TypeError, ValueError) as error:
+                raise TenantConfigError("confidence_threshold debe ser numérico") from error
+            if threshold < 0 or threshold > 1:
+                raise TenantConfigError("confidence_threshold debe estar entre 0 y 1")
+            merged["confidence_threshold"] = threshold
+        with self.lock:
+            data = self._read()
+            entry = data.setdefault(tenant_id, {})
+            if not isinstance(entry, dict):
+                entry = {}
+                data[tenant_id] = entry
+            entry["capture_settings"] = merged
+            self._write(data)
+        return merged
 
     def save_validation_rules(self, tenant_id: str, rules: object) -> dict[str, object]:
         if not isinstance(rules, dict):

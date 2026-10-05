@@ -57,6 +57,20 @@ export async function loginWithCognito(email: string, password: string): Promise
   });
 }
 
+export async function refreshCognitoSession(email: string): Promise<AuthSession | null> {
+  const user = pool().getCurrentUser();
+  if (!user) return null;
+  return new Promise((resolve, reject) => {
+    user.getSession((error: Error | null, session: CognitoUserSession | null) => {
+      if (error || !session?.isValid()) {
+        reject(error ?? new Error('La sesión de Cognito ha caducado.'));
+        return;
+      }
+      resolve(identityFromSession(session, email));
+    });
+  });
+}
+
 export function signOutCognito() {
   try {
     pool().getCurrentUser()?.signOut();

@@ -7,7 +7,7 @@ import { MD3LightTheme, PaperProvider } from 'react-native-paper';
 
 import { AUTH_PROVIDER, getCurrentUser, setAccessToken, setTenantId } from './src/api';
 import { clearAuthSession, loadAuthSession, saveAuthSession } from './src/authStorage';
-import { signOutCognito } from './src/cognito';
+import { refreshCognitoSession, signOutCognito } from './src/cognito';
 import { InboundDeliveryScreen } from './src/InboundDeliveryScreen';
 import { LoginScreen } from './src/LoginScreen';
 import type { AuthSession } from './src/types';
@@ -23,13 +23,21 @@ export default function App() {
         if (active) setSession(null);
         return;
       }
-      setAccessToken(saved.access_token);
-      setTenantId(saved.user.tenant_id);
+      let restored = saved;
+      if (AUTH_PROVIDER === 'cognito') {
+        try {
+          restored = (await refreshCognitoSession(saved.user.email)) ?? saved;
+        } catch {
+          // El backend será quien determine si el token almacenado sigue siendo válido.
+        }
+      }
+      setAccessToken(restored.access_token);
+      setTenantId(restored.user.tenant_id);
       try {
         const currentUser = await getCurrentUser();
-        const restored = { ...saved, user: currentUser.user };
-        await saveAuthSession(restored);
-        if (active) setSession(restored);
+        const current = { ...restored, user: currentUser.user };
+        await saveAuthSession(current);
+        if (active) setSession(current);
       } catch {
         setAccessToken(null);
         await clearAuthSession();

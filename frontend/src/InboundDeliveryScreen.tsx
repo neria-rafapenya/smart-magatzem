@@ -29,6 +29,7 @@ import {
   View,
   ViewStyle,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Text } from "react-native-paper";
 
@@ -36,6 +37,7 @@ import {
   ApiError,
   BACKEND_API_URL,
   analyzeDeliveryNote,
+  getCaptureSettings,
   getCustomers,
   getIntakeRecords,
   getAwsUsage,
@@ -51,10 +53,13 @@ import {
 } from "./DocumentCropper";
 import { croppedDocumentFilename } from "./documentCropUtils";
 import { compressDocumentForUpload } from "./documentUploadUtils";
+import { inspectLocalImageQuality, type LocalCaptureQuality } from "./localCaptureQuality";
+import { enqueueSubmission, getOfflineQueue, markQueuedSubmissionAttempt, removeQueuedSubmission } from "./offlineQueue";
 import type {
   AuthSession,
   AwsUsageEvent,
   AwsUsageSummary,
+  CaptureSettings,
   Customer,
   DeliveryNoteAnalysis,
   DocumentDirection,
@@ -69,6 +74,27 @@ type SelectedDocument = {
   content_base64: string;
   preview_uri?: string;
 };
+
+const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
+  guided_capture: true,
+  quality_gate: true,
+  torch_default: false,
+  enable_multipage: false,
+  enable_burst: false,
+  max_pages_per_document: 20,
+  max_file_size_mb: 2,
+  remember_last_selection: true,
+  offline_queue: true,
+  confidence_threshold: 0.85,
+};
+
+type LastSelection = {
+  documentType: IntakeDocumentType | null;
+  direction: DocumentDirection;
+  customerId: string | null;
+};
+
+const lastSelectionKey = (tenantId: string) => `@smart-magatzem/last-selection/${tenantId}`;
 
 type AppButtonProps = {
   children: ReactNode;
@@ -1011,6 +1037,20 @@ function ProcessedDocumentsScreen({
   onLogout: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyFilter, setHistoryFilter] = useState<"all" | "today" | "pending" | "error">("all");
+  const visibleRecords = useMemo(() => {
+    const query = normalizeSearch(historyQuery.trim());
+    const today = new Date().toISOString().slice(0, 10);
+    return records.filter((record) => {
+      const searchable = normalizeSearch(`${record.id} ${record.filename} ${record.client_id} ${record.interpretation.document_number ?? ""}`);
+      if (query && !searchable.includes(query)) return false;
+      if (historyFilter === "today" && !String(record.created_at ?? "").startsWith(today)) return false;
+      if (historyFilter === "pending" && ["sent_to_erp", "erp_rejected", "rejected"].includes(record.status)) return false;
+      if (historyFilter === "error" && !["erp_rejected", "rejected"].includes(record.status)) return false;
+      return true;
+    });
+  }, [historyFilter, historyQuery, records]);
   return (
     <View style={styles.root}>
       <View
@@ -1064,6 +1104,25 @@ function ProcessedDocumentsScreen({
             />
             Ver consumo de servicios AWS
           </AppButton>
+          <NativeTextInput
+            style={styles.historySearch}
+            value={historyQuery}
+            onChangeText={setHistoryQuery}
+            placeholder="Buscar por número, cliente o archivo"
+            placeholderTextColor="#718096"
+          />
+          <View style={styles.historyFilters}>
+            {([
+              ["all", "Todos"],
+              ["today", "Hoy"],
+              ["pending", "Pendientes"],
+              ["error", "Con error"],
+            ] as const).map(([value, label]) => (
+              <AppButton key={value} mode={historyFilter === value ? "contained" : "outlined"} onPress={() => setHistoryFilter(value)}>
+                {label}
+              </AppButton>
+            ))}
+          </View>
         </View>
         {records.length === 0 ? (
           <View style={styles.card}>
@@ -1073,8 +1132,10 @@ function ProcessedDocumentsScreen({
               </Text>
             </View>
           </View>
+        ) : visibleRecords.length === 0 ? (
+          <View style={styles.card}><View style={styles.cardContent}><Text variant="bodyMedium" style={styles.muted}>No hay documentos que coincidan con el filtro.</Text></View></View>
         ) : (
-          records.map((record) => {
+          visibleRecords.map((record) => {
             const detectedType =
               record.interpretation.document_type ??
               record.document_type ??
@@ -1425,6 +1486,9 @@ export function InboundDeliveryScreen({
     "intake" | "processed" | "usage" | "admin"
   >("intake");
   const [document, setDocument] = useState<SelectedDocument | null>(null);
+  const [documentPages, setDocumentPages] = useState<SelectedDocument[]>([]);
+  const [captureSettings, setCaptureSettings] = useState<CaptureSettings>(DEFAULT_CAPTURE_SETTINGS);
+  const [localQuality, setLocalQuality] = useState<LocalCaptureQuality | null>(null);
   const [cropRequest, setCropRequest] = useState<CropRequest | null>(null);
   const [analysis, setAnalysis] = useState<DeliveryNoteAnalysis | null>(null);
   const [manualMode, setManualMode] = useState(false);
@@ -1437,6 +1501,8 @@ export function InboundDeliveryScreen({
   const [cameraReady, setCameraReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [cameraCountdown, setCameraCountdown] = useState<number | null>(null);
+  const [torchEnabled, setTorchEnabled] = useState(false);
+  const [captureAppend, setCaptureAppend] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1445,9 +1511,12 @@ export function InboundDeliveryScreen({
   const [successNotice, setSuccessNotice] = useState(false);
   const [error, setError] = useState("");
   const [dataLoadError, setDataLoadError] = useState("");
+  const [queueNotice, setQueueNotice] = useState("");
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const wizardScrollRef = useRef<ScrollView>(null);
+  const selectionRestoredRef = useRef(false);
+  const queueDrainedRef = useRef(false);
 
   const filteredCustomers = useMemo(() => {
     const query = normalizeSearch(customerQuery.trim());
@@ -1479,6 +1548,8 @@ export function InboundDeliveryScreen({
     setCustomerQuery("");
     setCustomerInputFocused(true);
     setDocument(null);
+    setDocumentPages([]);
+    setLocalQuality(null);
     setAnalysis(null);
     setManualMode(false);
     setManualData(null);
@@ -1491,6 +1562,9 @@ export function InboundDeliveryScreen({
     setManualData(null);
     setSuccessNotice(false);
     setError("");
+    if (captureSettings.remember_last_selection) {
+      void AsyncStorage.setItem(lastSelectionKey(session.user.tenant_id), JSON.stringify({ documentType: type, direction: documentDirection, customerId: selectedCustomer?.id ?? null } satisfies LastSelection));
+    }
   };
 
   const chooseDocumentDirection = (direction: DocumentDirection) => {
@@ -1498,18 +1572,43 @@ export function InboundDeliveryScreen({
     setSelectedCustomer(null);
     setCustomerQuery("");
     setDocument(null);
+    setDocumentPages([]);
+    setLocalQuality(null);
     setAnalysis(null);
     setManualMode(false);
     setManualData(null);
+    if (captureSettings.remember_last_selection) {
+      void AsyncStorage.setItem(lastSelectionKey(session.user.tenant_id), JSON.stringify({ documentType, direction, customerId: null } satisfies LastSelection));
+    }
   };
 
   const loadData = useCallback(async () => {
-    const [customerResponse, supplierResponse, intakeResponse] =
-      await Promise.all([getCustomers(), getSuppliers(), getIntakeRecords()]);
+    const [customerResponse, supplierResponse, intakeResponse, settingsResponse] =
+      await Promise.all([getCustomers(), getSuppliers(), getIntakeRecords(), getCaptureSettings()]);
     setCustomers(customerResponse.data.slice(0, MAX_CUSTOMERS));
     setSuppliers(supplierResponse.data.slice(0, MAX_CUSTOMERS));
     setRecords(intakeResponse.data);
+    setCaptureSettings({ ...DEFAULT_CAPTURE_SETTINGS, ...settingsResponse.capture_settings });
   }, []);
+
+  const drainOfflineQueue = useCallback(async () => {
+    if (queueDrainedRef.current || !captureSettings.offline_queue) return;
+    queueDrainedRef.current = true;
+    const queue = await getOfflineQueue(session.user.tenant_id);
+    if (!queue.length) return;
+    setQueueNotice(`Reintentando ${queue.length} documento${queue.length === 1 ? "" : "s"} guardado${queue.length === 1 ? "" : "s"} sin conexión…`);
+    for (const item of queue) {
+      try {
+        const record = await submitDeliveryNote(item.payload);
+        await removeQueuedSubmission(session.user.tenant_id, item.id);
+        setRecords((current) => [record, ...current]);
+      } catch {
+        await markQueuedSubmissionAttempt(session.user.tenant_id, item.id);
+        break;
+      }
+    }
+    setQueueNotice("");
+  }, [captureSettings.offline_queue, session.user.tenant_id]);
 
   const handleLoadError = useCallback(
     (cause: unknown) => {
@@ -1521,6 +1620,24 @@ export function InboundDeliveryScreen({
     },
     [onLogout],
   );
+
+  useEffect(() => {
+    if (selectionRestoredRef.current || !captureSettings.remember_last_selection || (!customers.length && !suppliers.length)) return;
+    selectionRestoredRef.current = true;
+    void AsyncStorage.getItem(lastSelectionKey(session.user.tenant_id)).then((stored) => {
+      if (!stored) return;
+      try {
+        const value = JSON.parse(stored) as LastSelection;
+        if (value.documentType) setDocumentType(value.documentType);
+        if (value.direction) setDocumentDirection(value.direction);
+        const counterparties = value.direction === "inbound" ? suppliers : value.direction === "outbound" ? customers : [...customers, ...suppliers];
+        const customer = counterparties.find((item) => item.id === value.customerId);
+        if (customer) setSelectedCustomer(customer);
+      } catch {
+        // Una preferencia corrupta no debe impedir el uso del wizard.
+      }
+    });
+  }, [captureSettings.remember_last_selection, customers, session.user.tenant_id, suppliers]);
 
   useEffect(() => {
     let active = true;
@@ -1554,6 +1671,10 @@ export function InboundDeliveryScreen({
   }, [handleLoadError, loadData]);
 
   useEffect(() => {
+    if (!loading) void drainOfflineQueue();
+  }, [drainOfflineQueue, loading]);
+
+  useEffect(() => {
     if (!message) return undefined;
     const timeout = setTimeout(() => setMessage(""), 3000);
     return () => clearTimeout(timeout);
@@ -1579,7 +1700,28 @@ export function InboundDeliveryScreen({
     setSuccessNotice(false);
   };
 
-  const chooseDocumentFile = async () => {
+  const setSelectedDocument = async (next: SelectedDocument, append = false) => {
+    if (append && documentPages.length >= captureSettings.max_pages_per_document) {
+      setError(`El documento no puede superar ${captureSettings.max_pages_per_document} hojas.`);
+      return;
+    }
+    if (append) {
+      setDocumentPages((current) => [...current, next]);
+    } else {
+      setDocumentPages([next]);
+    }
+    setDocument(next);
+    setLocalQuality(next.preview_uri ? await inspectLocalImageQuality(next.preview_uri) : null);
+    resetAfterDocumentSelection();
+  };
+
+  const addDocumentPage = () => {
+    setQueueNotice("");
+    setError("");
+    void chooseDocumentFile(true);
+  };
+
+  const chooseDocumentFile = async (append = false) => {
     const result = await DocumentPicker.getDocumentAsync({
       type: ["image/*", "application/pdf", "text/plain"],
       copyToCacheDirectory: true,
@@ -1594,18 +1736,19 @@ export function InboundDeliveryScreen({
         filename: asset.name,
         content_type: contentType,
       });
+      if (append) setQueueNotice("Selecciona el recorte de la nueva hoja para añadirla al documento.");
     } else {
-      setDocument({
+      await setSelectedDocument({
         filename: asset.name,
         content_type: contentType,
         content_base64: asset.base64 ?? "",
         preview_uri: contentType.startsWith("image/") ? asset.uri : undefined,
-      });
+      }, append);
     }
-    resetAfterDocumentSelection();
+    if (!append) resetAfterDocumentSelection();
   };
 
-  const chooseMobileImage = async () => {
+  const chooseMobileImage = async (append = false) => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
@@ -1618,13 +1761,12 @@ export function InboundDeliveryScreen({
     if (!asset.base64) {
       throw new Error("No se ha podido preparar la imagen recortada.");
     }
-    setDocument({
+    await setSelectedDocument({
       filename: croppedDocumentFilename(),
       content_type: "image/jpeg",
       content_base64: asset.base64,
       preview_uri: asset.uri,
-    });
-    resetAfterDocumentSelection();
+    }, append);
   };
 
   const choosePdfFile = async () => {
@@ -1635,53 +1777,15 @@ export function InboundDeliveryScreen({
     });
     if (result.canceled) return;
     const asset = result.assets[0];
-    setDocument({
+    await setSelectedDocument({
       filename: asset.name,
       content_type: asset.mimeType ?? "application/octet-stream",
       content_base64: asset.base64 ?? "",
     });
-    resetAfterDocumentSelection();
   };
 
-  const captureMobilePhoto = async () => {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      setError(
-        "Necesitamos permiso de cámara para capturar el documento. Revisa los permisos del móvil.",
-      );
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      // El recortador nativo aparece después de tomar la fotografía.
-      allowsEditing: true,
-      aspect: [3, 4],
-      base64: true,
-      quality: 0.9,
-    });
-    if (result.canceled) return;
-    const asset = result.assets[0];
-    if (!asset.base64) {
-      throw new Error("No se ha podido preparar la imagen recortada.");
-    }
-    setDocument({
-      filename: croppedDocumentFilename(),
-      content_type: "image/jpeg",
-      content_base64: asset.base64,
-      preview_uri: asset.uri,
-    });
-    resetAfterDocumentSelection();
-  };
-
-  const openCamera = async () => {
-    if (Platform.OS !== "web") {
-      try {
-        setError("");
-        await captureMobilePhoto();
-      } catch (cause) {
-        setError((cause as Error).message);
-      }
-      return;
-    }
+  const openCamera = async (append = false) => {
+    setCaptureAppend(append);
     try {
       const permission = cameraPermission?.granted
         ? cameraPermission
@@ -1695,6 +1799,7 @@ export function InboundDeliveryScreen({
       setError("");
       setCameraReady(false);
       setCameraCountdown(5);
+      setTorchEnabled(captureSettings.torch_default);
       setCameraOpen(true);
     } catch (cause) {
       setError((cause as Error).message);
@@ -1705,6 +1810,8 @@ export function InboundDeliveryScreen({
     setCameraOpen(false);
     setCameraReady(false);
     setCameraCountdown(null);
+    setTorchEnabled(false);
+    setCaptureAppend(false);
   }, []);
 
   const capturePhoto = useCallback(async () => {
@@ -1727,6 +1834,7 @@ export function InboundDeliveryScreen({
         uri: picture.uri,
         filename: `albaran-${Date.now()}.jpg`,
         content_type: "image/jpeg",
+        append: captureAppend,
       });
       setAnalysis(null);
       setManualMode(false);
@@ -1738,10 +1846,10 @@ export function InboundDeliveryScreen({
     } finally {
       setCapturing(false);
     }
-  }, [cameraReady, closeCamera]);
+  }, [cameraReady, captureAppend, closeCamera]);
 
   useEffect(() => {
-    if (Platform.OS !== "web" || !cameraOpen || !cameraReady) return undefined;
+    if (!cameraOpen || !cameraReady) return undefined;
     const countdownTimer = setInterval(() => {
       setCameraCountdown((current) =>
         current && current > 1 ? current - 1 : 0,
@@ -1757,12 +1865,13 @@ export function InboundDeliveryScreen({
   }, [cameraOpen, cameraReady, capturePhoto]);
 
   const completeCrop = (result: CropResult) => {
-    setDocument({
+    const next = {
       filename: result.filename,
       content_type: result.content_type,
       content_base64: result.base64,
       preview_uri: result.uri,
-    });
+    };
+    void setSelectedDocument(next, Boolean(cropRequest?.append));
     setCropRequest(null);
     setAnalysis(null);
     setManualMode(false);
@@ -1865,6 +1974,15 @@ export function InboundDeliveryScreen({
         content_type: document.content_type,
         content_base64: document.content_base64,
         ...(manualOverride ? { manual_data: manualOverride } : {}),
+        ...(documentPages.length > 1
+          ? {
+              pages: documentPages.map((page) => ({
+                filename: page.filename,
+                content_type: page.content_type,
+                content_base64: page.content_base64,
+              })),
+            }
+          : {}),
       });
       setAnalysis(result);
       setManualData(manualOverride);
@@ -1935,7 +2053,7 @@ export function InboundDeliveryScreen({
     setError("");
     try {
       const uploadDocument = await compressDocumentForUpload(document);
-      const record = await submitDeliveryNote({
+      const submissionPayload = {
         client_id: selectedCustomer.id,
         client_email: selectedCustomer.email,
         client_name: selectedCustomer.name,
@@ -1946,7 +2064,22 @@ export function InboundDeliveryScreen({
         content_type: uploadDocument.content_type,
         content_base64: uploadDocument.content_base64,
         ...(manualData ? { manual_data: manualData } : {}),
-      });
+        ...(documentPages.length > 1
+          ? {
+              pages: await Promise.all(
+                documentPages.map(async (page) => {
+                  const compressed = await compressDocumentForUpload(page);
+                  return {
+                    filename: compressed.filename,
+                    content_type: compressed.content_type,
+                    content_base64: compressed.content_base64,
+                  };
+                }),
+              ),
+            }
+          : {}),
+      };
+      const record = await submitDeliveryNote(submissionPayload);
       setRecords((current) => [record, ...current]);
       if (record.status === "sent_to_erp") {
         setMessage("");
@@ -1956,12 +2089,49 @@ export function InboundDeliveryScreen({
         setSuccessNotice(false);
       }
       setDocument(null);
+      setDocumentPages([]);
+      setLocalQuality(null);
       setCropRequest(null);
       setAnalysis(null);
       setManualMode(false);
       setManualData(null);
     } catch (cause) {
-      setError((cause as Error).message);
+      const isConnectivityError = !(cause instanceof ApiError) || (cause instanceof ApiError && cause.status >= 500);
+      if (captureSettings.offline_queue && isConnectivityError && selectedCustomer && document) {
+        try {
+          const uploadDocument = await compressDocumentForUpload(document);
+          const queuedPayload = {
+            client_id: selectedCustomer.id,
+            client_email: selectedCustomer.email,
+            client_name: selectedCustomer.name,
+            client_tax_id: selectedCustomer.tax_id,
+            document_type: documentType,
+            document_direction: documentDirection,
+            filename: uploadDocument.filename,
+            content_type: uploadDocument.content_type,
+            content_base64: uploadDocument.content_base64,
+            ...(manualData ? { manual_data: manualData } : {}),
+            ...(documentPages.length > 1 ? {
+              pages: await Promise.all(documentPages.map(async (page) => {
+                const compressed = await compressDocumentForUpload(page);
+                return { filename: compressed.filename, content_type: compressed.content_type, content_base64: compressed.content_base64 };
+              })),
+            } : {}),
+          };
+          await enqueueSubmission(session.user.tenant_id, queuedPayload);
+          setQueueNotice("Documento guardado en la cola local. Se enviará automáticamente cuando vuelva la conexión.");
+          setError("");
+          setDocument(null);
+          setDocumentPages([]);
+          setAnalysis(null);
+          setManualMode(false);
+          setManualData(null);
+        } catch (queueError) {
+          setError((queueError as Error).message);
+        }
+      } else {
+        setError((cause as Error).message);
+      }
     } finally {
       setSending(false);
     }
@@ -1985,6 +2155,19 @@ export function InboundDeliveryScreen({
     setSuccessNotice(false);
     setMessage("");
     setError("");
+  };
+
+  const startNextDocument = () => {
+    setSuccessNotice(false);
+    setMessage("");
+    setError("");
+    setDocument(null);
+    setDocumentPages([]);
+    setLocalQuality(null);
+    setAnalysis(null);
+    setManualMode(false);
+    setManualData(null);
+    setTimeout(() => wizardScrollRef.current?.scrollTo({ y: 0, animated: true }), 80);
   };
 
   if (loading) {
@@ -2138,6 +2321,17 @@ export function InboundDeliveryScreen({
             </View>
           ) : null}
 
+          {queueNotice ? (
+            <View style={[styles.card, styles.queueCard]} accessibilityRole="alert">
+              <View style={styles.cardContent}>
+                <View style={styles.analysisHeadingRow}>
+                  <MaterialCommunityIcons name="cloud-sync-outline" size={24} color="#1f5fbf" />
+                  <Text variant="bodyMedium" style={styles.queueText}>{queueNotice}</Text>
+                </View>
+              </View>
+            </View>
+          ) : null}
+
           {successNotice ? (
             <View
               style={[styles.card, styles.successAlert]}
@@ -2157,6 +2351,12 @@ export function InboundDeliveryScreen({
                 >
                   Ver documentos enviados al ERP
                 </AppButton>
+                {captureSettings.enable_burst ? (
+                  <AppButton mode="outlined" onPress={startNextDocument}>
+                    <MaterialCommunityIcons name="camera-plus-outline" size={18} color="#1f5fbf" />
+                    Capturar siguiente
+                  </AppButton>
+                ) : null}
               </View>
             </View>
           ) : null}
@@ -2264,7 +2464,12 @@ export function InboundDeliveryScreen({
                                 setCustomerInputFocused(false);
                                 Keyboard.dismiss();
                                 setDocument(null);
+                                setDocumentPages([]);
+                                setLocalQuality(null);
                                 setAnalysis(null);
+                                if (captureSettings.remember_last_selection) {
+                                  void AsyncStorage.setItem(lastSelectionKey(session.user.tenant_id), JSON.stringify({ documentType, direction: documentDirection, customerId: customer.id } satisfies LastSelection));
+                                }
                               }}
                               onPress={() => {
                                 // Android can deliver both onPressIn and onPress; selection is handled once in onPressIn.
@@ -2323,9 +2528,19 @@ export function InboundDeliveryScreen({
                   </View>
                   {document ? (
                     <View style={styles.cardContent}>
-                      <Text variant="bodyMedium">
-                        Seleccionado: {document.filename}
-                      </Text>
+                      <View style={styles.previewHeading}>
+                        <Text variant="bodyMedium" style={styles.previewFilename}>
+                          {documentPages.length > 1 ? `${documentPages.length} hojas seleccionadas` : `Seleccionado: ${document.filename}`}
+                        </Text>
+                        {captureSettings.enable_multipage ? (
+                          <AppIconButton
+                            icon="layers-plus"
+                            onPress={addDocumentPage}
+                            accessibilityLabel="Añadir otra hoja"
+                          />
+                        ) : null}
+                      </View>
+                      {queueNotice ? <Text variant="bodySmall" style={styles.helperText}>{queueNotice}</Text> : null}
                       {document.preview_uri ? (
                         <Image
                           source={{ uri: document.preview_uri }}
@@ -2333,6 +2548,14 @@ export function InboundDeliveryScreen({
                           resizeMode="contain"
                           accessibilityLabel="Previsualización del documento"
                         />
+                      ) : null}
+                      {localQuality && localQuality.status !== "unavailable" ? (
+                        <View style={[styles.captureQuality, localQuality.status === "good" ? styles.captureQualityGood : styles.captureQualityReview]}>
+                          <MaterialCommunityIcons name={localQuality.status === "good" ? "check-circle-outline" : "alert-circle-outline"} size={18} color={localQuality.status === "good" ? "#1c7c54" : "#8a4b08"} />
+                          <Text variant="bodySmall" style={localQuality.status === "good" ? styles.successText : styles.warningText}>
+                            {localQuality.status === "good" ? "Calidad de captura correcta" : `Revisa la captura: ${localQuality.reasons.join(" · ")}`}
+                          </Text>
+                        </View>
                       ) : null}
                     </View>
                   ) : null}
@@ -2351,8 +2574,19 @@ export function InboundDeliveryScreen({
                       style={styles.cameraPreview}
                       facing="back"
                       mode="picture"
+                      enableTorch={torchEnabled}
                       onCameraReady={() => setCameraReady(true)}
-                    />
+                    >
+                      {captureSettings.guided_capture ? <View pointerEvents="none" style={styles.cameraGuideFrame} /> : null}
+                      <View style={styles.cameraToolbar}>
+                        <AppIconButton
+                          icon={torchEnabled ? "flash" : "flash-off"}
+                          onPress={() => setTorchEnabled((value) => !value)}
+                          accessibilityLabel={torchEnabled ? "Desactivar linterna" : "Activar linterna"}
+                          style={styles.cameraToolbarButton}
+                        />
+                      </View>
+                    </CameraView>
                     <View style={styles.cameraCountdown}>
                       <Text variant="bodyMedium">
                         La foto se capturará automáticamente en
@@ -2365,6 +2599,9 @@ export function InboundDeliveryScreen({
                       </Text>
                       <Text variant="bodySmall" style={styles.panelSubtitle}>
                         Coloca el documento dentro del encuadre.
+                      </Text>
+                      <Text variant="bodySmall" style={styles.panelSubtitle}>
+                        La comprobación de nitidez e iluminación se hará antes del análisis.
                       </Text>
                     </View>
                   </View>
@@ -2491,6 +2728,11 @@ export function InboundDeliveryScreen({
                               ? "coincide"
                               : "revisar"}
                           </Text>
+                          {analysis.interpretation.document_customer.name || analysis.interpretation.document_customer.id ? (
+                            <Text variant="bodySmall">
+                              Detectado en documento: {analysis.interpretation.document_customer.id ?? analysis.interpretation.document_customer.name}
+                            </Text>
+                          ) : null}
                           <Text variant="bodySmall">
                             Dirección:{" "}
                             {
@@ -2511,6 +2753,14 @@ export function InboundDeliveryScreen({
                             </Text>
                           ) : null}
                         </View>
+                        {Object.entries(analysis.interpretation.field_confidence ?? {}).some(([, confidence]) => confidence < captureSettings.confidence_threshold) ? (
+                          <View style={styles.confidenceNotice}>
+                            <MaterialCommunityIcons name="target-account" size={18} color="#8a4b08" />
+                            <Text variant="bodySmall" style={styles.warningText}>
+                              Hay campos con lectura dudosa. Abre los detalles antes de enviar.
+                            </Text>
+                          </View>
+                        ) : null}
                         {!analysis.can_send ? (
                           <View style={styles.manualEntryAction}>
                             <AppButton
@@ -2550,6 +2800,14 @@ export function InboundDeliveryScreen({
                               Líneas detectadas:{" "}
                               {analysis.interpretation.lines.length}
                             </Text>
+                            {Object.entries(analysis.interpretation.field_confidence ?? {}).map(([field, confidence]) => (
+                              <View key={field} style={styles.confidenceRow}>
+                                <Text variant="bodySmall">{field}</Text>
+                                <Text variant="bodySmall" style={confidence < captureSettings.confidence_threshold ? styles.warningText : styles.successText}>
+                                  {Math.round(confidence * 100)}% confianza
+                                </Text>
+                              </View>
+                            ))}
                             {analysis.interpretation.lines.length > 0 ? (
                               <Text variant="bodySmall">
                                 {analysis.interpretation.lines
@@ -2734,15 +2992,25 @@ const styles = StyleSheet.create({
   hero: { padding: 20, borderRadius: 16, backgroundColor: "#eaf1ff", gap: 8 },
   endpoint: { color: "#53657d", marginTop: 4 },
   muted: { color: "#5d6b7c" },
+  warningText: { color: "#8a4b08" },
   card: {
     backgroundColor: "#ffffff",
     borderWidth: 1,
     borderColor: "#dbe3ef",
     borderRadius: 12,
   },
+  previewHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  previewFilename: { flex: 1, fontWeight: "700" },
+  captureQuality: { flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderRadius: 8, marginTop: 10 },
+  captureQualityGood: { backgroundColor: "#effaf4" },
+  captureQualityReview: { backgroundColor: "#fff2dc" },
+  confidenceNotice: { flexDirection: "row", alignItems: "center", gap: 8, padding: 10, marginTop: 10, borderRadius: 8, backgroundColor: "#fff2dc" },
+  confidenceRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 2 },
   customerCard: { zIndex: 20, elevation: 20 },
   errorCard: { backgroundColor: "#fff5f5", borderColor: "#e3aaaa" },
   successAlert: { backgroundColor: "#effaf4", borderColor: "#9bd5b5" },
+  queueCard: { backgroundColor: "#eef5ff", borderColor: "#b7cef0" },
+  queueText: { flex: 1, color: "#1f5fbf" },
   usageExclusion: {
     flexDirection: "row",
     alignItems: "center",
@@ -2921,6 +3189,8 @@ const styles = StyleSheet.create({
   },
   suggestionButton: { justifyContent: "flex-start" },
   helperText: { color: "#5d6b7c", marginTop: 6 },
+  historySearch: { minHeight: 48, borderWidth: 1, borderColor: "#9bb3d3", borderRadius: 8, paddingHorizontal: 14, backgroundColor: "#ffffff", color: "#1f2937", fontSize: 15, marginTop: 8 },
+  historyFilters: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   fieldLabel: { color: "#3f4b5a", marginBottom: 6 },
   customerInputWrap: { position: "relative" },
   nativeInput: {
@@ -2942,6 +3212,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: "hidden",
   },
+  cameraGuideFrame: { position: "absolute", left: "8%", right: "8%", top: "10%", bottom: "10%", borderWidth: 2, borderColor: "#ffffff", borderRadius: 12, opacity: 0.9 },
+  cameraToolbar: { position: "absolute", right: 12, top: 12 },
+  cameraToolbarButton: { backgroundColor: "rgba(0,0,0,0.45)" },
   cameraCountdown: { alignItems: "center", paddingVertical: 12, gap: 4 },
   countdownNumber: { color: "#1f5fbf", fontWeight: "700" },
   documentPreview: {

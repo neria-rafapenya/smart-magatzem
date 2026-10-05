@@ -114,8 +114,16 @@ def create_server(
                             "fields": tenant_config.get_fields(identity["tenant_id"]),
                             "templates": tenant_config.list_templates(identity["tenant_id"]),
                             "validation_rules": tenant_config.get_validation_rules(identity["tenant_id"]),
+                            "capture_settings": tenant_config.get_capture_settings(identity["tenant_id"]),
                         },
                     )
+                    return
+                if parsed.path == "/api/tenant/capture-settings":
+                    identity = self._require_permission("document.read")
+                    self._send(HTTPStatus.OK, {
+                        "tenant_id": identity["tenant_id"],
+                        "capture_settings": tenant_config.get_capture_settings(identity["tenant_id"]),
+                    })
                     return
                 if parsed.path == "/api/connectors":
                     self._send(HTTPStatus.OK, {"active": connector.name, "data": [connector.health(), {"provider": "file", "status": "available"}]})
@@ -215,6 +223,11 @@ def create_server(
                     identity = self._require_permission("tenant.configure")
                     rules = tenant_config.save_validation_rules(identity["tenant_id"], payload.get("validation_rules", payload))
                     self._send(HTTPStatus.OK, {"validation_rules": rules})
+                    return
+                if parsed.path == "/api/admin/document-config/capture-settings":
+                    identity = self._require_permission("tenant.configure")
+                    settings = tenant_config.save_capture_settings(identity["tenant_id"], payload.get("capture_settings", payload))
+                    self._send(HTTPStatus.OK, {"capture_settings": settings})
                     return
                 if parsed.path == "/api/admin/document-config/templates":
                     identity = self._require_permission("tenant.configure")

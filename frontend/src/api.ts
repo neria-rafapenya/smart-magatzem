@@ -1,4 +1,4 @@
-import type { AuthIdentity, AuthSession, AwsUsageSummary, Customer, DeliveryNote, DeliveryNoteAnalysis, DeliveryNoteStatus, DocumentDirection, ErpConnection, IntakeDocumentType, IntakeRecord, ManualDocumentData, Order, Tenant, TenantDocumentConfig, TenantDocumentField, TenantTemplate } from './types';
+import type { AuthIdentity, AuthSession, AwsUsageSummary, CaptureSettings, Customer, DeliveryNote, DeliveryNoteAnalysis, DeliveryNoteStatus, DocumentDirection, ErpConnection, IntakeDocumentType, IntakeRecord, ManualDocumentData, Order, Tenant, TenantDocumentConfig, TenantDocumentField, TenantTemplate } from './types';
 import { loginWithCognito } from './cognito';
 
 declare const process: { env: { EXPO_PUBLIC_BACKEND_API_URL?: string; EXPO_PUBLIC_AUTH_PROVIDER?: string } };
@@ -120,6 +120,17 @@ export async function getTenantDocumentConfig() {
   return request<TenantDocumentConfig>('/api/admin/document-config');
 }
 
+export async function getCaptureSettings() {
+  return request<{ tenant_id: string; capture_settings: CaptureSettings }>('/api/tenant/capture-settings');
+}
+
+export async function saveCaptureSettings(capture_settings: Partial<CaptureSettings>) {
+  return request<{ capture_settings: CaptureSettings }>('/api/admin/document-config/capture-settings', {
+    method: 'POST',
+    body: JSON.stringify({ capture_settings }),
+  });
+}
+
 export async function saveTenantDocumentFields(fields: TenantDocumentField[]) {
   return request<{ fields: TenantDocumentField[] }>('/api/admin/document-config/fields', {
     method: 'POST',
@@ -168,7 +179,7 @@ export async function getAwsUsage() {
   return request<AwsUsageSummary>('/api/usage/aws');
 }
 
-type IntakePayload = {
+export type IntakePayload = {
   client_id: string;
   client_email?: string;
   client_name?: string;

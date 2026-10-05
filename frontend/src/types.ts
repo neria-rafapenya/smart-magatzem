@@ -91,6 +91,20 @@ export type TenantDocumentConfig = {
   fields: TenantDocumentField[];
   templates: TenantTemplate[];
   validation_rules?: Record<string, unknown>;
+  capture_settings?: CaptureSettings;
+};
+
+export type CaptureSettings = {
+  guided_capture: boolean;
+  quality_gate: boolean;
+  torch_default: boolean;
+  enable_multipage: boolean;
+  enable_burst: boolean;
+  max_pages_per_document: number;
+  max_file_size_mb: number;
+  remember_last_selection: boolean;
+  offline_queue: boolean;
+  confidence_threshold: number;
 };
 
 export type IntakeDocumentType = 'auto' | 'order' | 'delivery_note' | 'packing_list' | 'transport_document' | 'invoice' | 'deca';
@@ -151,6 +165,7 @@ export type AwsUsageSummary = {
 
 export type IntakeRecord = {
   id: string;
+  created_at?: string;
   filename: string;
   client_id: string;
   client_email: string | null;
@@ -195,6 +210,7 @@ export type IntakeRecord = {
     lines: { sku: string; quantity: number; unit_price?: number }[];
     reasons: string[];
     missing_fields?: string[];
+    field_confidence?: Record<string, number>;
   };
   erp?: { id: string; status: string; document_number: string };
   client_copy?: { status: string; object_key: string };
@@ -222,4 +238,5 @@ export type DeliveryNoteAnalysis = {
   missing_fields: string[];
   ocr: { status: string; text: string };
   interpretation: IntakeRecord['interpretation'];
+  field_confidence?: Record<string, number>;
 };

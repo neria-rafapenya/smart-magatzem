@@ -198,6 +198,40 @@ class AwsRuntime:
             return default
         return {**default, **stored}
 
+    def capture_settings(self, tenant_id: str) -> dict[str, object]:
+        default = {
+            "guided_capture": True,
+            "quality_gate": True,
+            "torch_default": False,
+            "enable_multipage": False,
+            "enable_burst": False,
+            "max_pages_per_document": int(os.getenv("MAX_PAGES_PER_DOCUMENT", "20")),
+            "max_file_size_mb": 2,
+            "remember_last_selection": True,
+            "offline_queue": True,
+            "confidence_threshold": 0.85,
+        }
+        item = self.table.get_item(Key={"pk": f"TENANT#{tenant_id}", "sk": "CONFIG#CAPTURE"}).get("Item")
+        if not item:
+            return default
+        try:
+            stored = json.loads(str(item.get("payload", "{}")))
+        except json.JSONDecodeError:
+            return default
+        return {**default, **stored} if isinstance(stored, dict) else default
+
+    def save_capture_settings(self, tenant_id: str, settings: dict[str, object]) -> dict[str, object]:
+        current = self.capture_settings(tenant_id)
+        for key in {
+            "guided_capture", "quality_gate", "torch_default", "enable_multipage",
+            "enable_burst", "remember_last_selection", "offline_queue",
+            "max_pages_per_document", "max_file_size_mb", "confidence_threshold",
+        }:
+            if key in settings:
+                current[key] = settings[key]
+        self.table.put_item(Item={"pk": f"TENANT#{tenant_id}", "sk": "CONFIG#CAPTURE", "payload": json.dumps(current, ensure_ascii=False)})
+        return current
+
     def save_validation_rules(self, tenant_id: str, rules: dict[str, object]) -> dict[str, object]:
         current = self.validation_rules(tenant_id)
         for section_name in ("delivery_note_against_order", "invoice_against_delivery_note"):
@@ -414,6 +448,13 @@ class AwsRuntime:
             "selected_customer": {"id": client_id, "name": None, "tax_id": None},
             "customer_match": {"status": "matched", "reason": "cliente seleccionado por el operador"},
             "lines": lines,
+            "field_confidence": {
+                "document_number": 0.95 if document_number else 0.0,
+                "document_type": 0.92 if document_type != "unknown" else 0.0,
+                "document_direction": 0.9 if direction in {"inbound", "outbound"} else 0.0,
+                "customer": 0.96,
+                "lines": 0.88 if lines else 0.0,
+            },
             "reasons": reasons,
             "missing_fields": reasons,
         }
@@ -754,6 +795,18 @@ def handler(event: dict[str, object], _context) -> dict[str, object]:
     runtime = AwsRuntime()
     if path == "/api/auth/me" and method == "GET":
         return _response(200, {"user": identity})
+    if path == "/api/tenant/capture-settings" and method == "GET":
+        return _response(200, {
+            "tenant_id": identity["tenant_id"],
+            "capture_settings": runtime.capture_settings(str(identity["tenant_id"])),
+        })
+    if path == "/api/admin/document-config/capture-settings":
+        if "*" not in identity["permissions"]:
+            return _response(403, {"error": "solo un administrador puede cambiar la configuración de captura"})
+        if method == "GET":
+            return _response(200, {"capture_settings": runtime.capture_settings(str(identity["tenant_id"]))})
+        if method == "POST":
+            return _response(200, {"capture_settings": runtime.save_capture_settings(str(identity["tenant_id"]), _body(event).get("capture_settings", {}))})
     if path == "/api/admin/document-config/validation-rules":
         if "*" not in identity["permissions"]:
             return _response(403, {"error": "solo un administrador puede cambiar las reglas del tenant"})
