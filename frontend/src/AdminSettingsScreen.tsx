@@ -2,7 +2,7 @@ import { createElement, useCallback, useEffect, useState, type CSSProperties } f
 import { Platform, Image, ScrollView, StyleSheet, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { Button, HelperText, Menu, Surface, Text, TextInput } from 'react-native-paper';
+import { Button, Menu, Surface, Text, TextInput } from 'react-native-paper';
 
 import {
   createTenant,
@@ -326,8 +326,6 @@ export function AdminSettingsScreen({
       <ScrollView contentContainerStyle={styles.content}>
         <FeedbackNotice message={message} error={error} />
         {loading ? <Text>Cargando configuración…</Text> : null}
-        {error ? <HelperText type="error" visible>{error}</HelperText> : null}
-        {message ? <HelperText type="info" visible>{message}</HelperText> : null}
 
         <Surface style={styles.card} elevation={1}>
           <Text variant="headlineSmall">Tenants</Text>

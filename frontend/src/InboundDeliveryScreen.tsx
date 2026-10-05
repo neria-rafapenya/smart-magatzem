@@ -2956,14 +2956,6 @@ export function InboundDeliveryScreen({
           onComplete={completeCrop}
         />
       ) : null}
-      {message ? (
-        <View
-          style={[styles.toast, { bottom: insets.bottom + 16 }]}
-          accessibilityRole="alert"
-        >
-          <Text style={styles.toastText}>{message}</Text>
-        </View>
-      ) : null}
       <FeedbackNotice message={message} error={error} />
     </View>
   );
