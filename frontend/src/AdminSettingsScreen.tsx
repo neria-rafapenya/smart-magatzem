@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { Button, HelperText, Surface, Text, TextInput } from 'react-native-paper';
+import { Button, HelperText, Menu, Surface, Text, TextInput } from 'react-native-paper';
 
 import {
   createTenant,
@@ -38,6 +38,7 @@ export function AdminSettingsScreen({
 }) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenantId, setSelectedTenantId] = useState(session.user.tenant_id);
+  const [tenantMenuVisible, setTenantMenuVisible] = useState(false);
   const [connection, setConnection] = useState<ErpConnection | null>(null);
   const [fields, setFields] = useState<TenantDocumentField[]>([]);
   const [templates, setTemplates] = useState<TenantTemplate[]>([]);
@@ -318,18 +319,37 @@ export function AdminSettingsScreen({
         <Surface style={styles.card} elevation={1}>
           <Text variant="headlineSmall">Tenants</Text>
           <Text variant="bodyMedium" style={styles.muted}>Selecciona el tenant cuya conexión quieres administrar.</Text>
-          <View style={styles.tenantList}>
-            {tenants.map((tenant) => (
+          <Menu
+            visible={tenantMenuVisible}
+            onDismiss={() => setTenantMenuVisible(false)}
+            anchor={(
               <Button
-                key={tenant.id}
-                mode={tenant.id === selectedTenantId ? 'contained' : 'outlined'}
-                onPress={() => { void selectTenant(tenant.id); }}
-                style={styles.tenantButton}
+                mode="outlined"
+                icon="chevron-down"
+                contentStyle={styles.tenantSelectorContent}
+                style={styles.tenantSelector}
+                onPress={() => setTenantMenuVisible(true)}
+                disabled={tenants.length === 0}
               >
-                {tenant.id} · {tenant.name}
+                {tenants.find((tenant) => tenant.id === selectedTenantId)?.id ?? 'Seleccionar tenant'}
+                {tenants.find((tenant) => tenant.id === selectedTenantId)
+                  ? ` · ${tenants.find((tenant) => tenant.id === selectedTenantId)?.name}`
+                  : ''}
               </Button>
+            )}
+          >
+            {tenants.map((tenant) => (
+              <Menu.Item
+                key={tenant.id}
+                title={`${tenant.id} · ${tenant.name}`}
+                leadingIcon={tenant.id === selectedTenantId ? 'check' : undefined}
+                onPress={() => {
+                  setTenantMenuVisible(false);
+                  void selectTenant(tenant.id);
+                }}
+              />
             ))}
-          </View>
+          </Menu>
         </Surface>
 
         <Surface style={styles.card} elevation={1}>
@@ -468,8 +488,8 @@ const styles = StyleSheet.create({
   content: { width: '100%', maxWidth: 920, alignSelf: 'center', padding: 24, gap: 18 },
   card: { padding: 22, borderRadius: 16, backgroundColor: '#ffffff', gap: 12 },
   muted: { color: '#53657d' },
-  tenantList: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  tenantButton: { marginRight: 4 },
+  tenantSelector: { alignSelf: 'stretch' },
+  tenantSelectorContent: { justifyContent: 'space-between' },
   input: { backgroundColor: '#ffffff' },
   sectionLabel: { color: '#53657d', marginTop: 4 },
   optionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
