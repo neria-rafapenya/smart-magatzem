@@ -1,15 +1,33 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Cropper, { type Area } from 'react-easy-crop';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
 import { type CropRequest, type CropResult, type DocumentCropperProps } from './DocumentCropper';
 import { croppedDocumentFilename } from './documentCropUtils';
 
-async function cropImage(request: CropRequest, area: Area): Promise<CropResult> {
+async function loadImage(uri: string): Promise<HTMLImageElement> {
   const image = new Image();
   image.crossOrigin = 'anonymous';
-  image.src = request.uri;
+  image.src = uri;
   await image.decode();
+  return image;
+}
+
+async function enhanceImage(uri: string): Promise<string> {
+  const image = await loadImage(uri);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, image.naturalWidth || image.width);
+  canvas.height = Math.max(1, image.naturalHeight || image.height);
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('No se ha podido mejorar la imagen.');
+  context.filter = 'brightness(1.08) contrast(1.28) saturate(0.72)';
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.92);
+}
+
+async function cropImage(uri: string, area: Area): Promise<CropResult> {
+  const image = await loadImage(uri);
 
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(area.width));
@@ -42,20 +60,48 @@ export function DocumentCropper({ request, onCancel, onComplete }: DocumentCropp
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [area, setArea] = useState<Area | null>(null);
+  const [enhanced, setEnhanced] = useState(false);
+  const [displayUri, setDisplayUri] = useState(request.uri);
+  const [enhancing, setEnhancing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    setEnhanced(false);
+    setDisplayUri(request.uri);
+    setEnhancing(false);
+  }, [request.uri]);
+
+  const toggleEnhancement = useCallback(async () => {
+    if (enhancing) return;
+    if (enhanced) {
+      setEnhanced(false);
+      setDisplayUri(request.uri);
+      return;
+    }
+    setEnhancing(true);
+    setError('');
+    try {
+      setDisplayUri(await enhanceImage(request.uri));
+      setEnhanced(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'No se ha podido mejorar la imagen.');
+    } finally {
+      setEnhancing(false);
+    }
+  }, [enhanced, enhancing, request.uri]);
 
   const complete = useCallback(async () => {
     if (!area || saving) return;
     setSaving(true);
     setError('');
     try {
-      onComplete(await cropImage(request, area));
+      onComplete(await cropImage(displayUri, area));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'No se ha podido recortar la imagen.');
       setSaving(false);
     }
-  }, [area, onComplete, request, saving]);
+  }, [area, displayUri, onComplete, saving]);
 
   return (
       <View style={styles.overlay}>
@@ -64,7 +110,7 @@ export function DocumentCropper({ request, onCancel, onComplete }: DocumentCropp
         <Text style={styles.subtitle}>Ajusta el marco para dejar fuera el fondo y conservar todo el documento.</Text>
         <View style={styles.cropArea}>
           <Cropper
-            image={request.uri}
+            image={displayUri}
             crop={crop}
             zoom={zoom}
             aspect={3 / 4}
@@ -75,6 +121,19 @@ export function DocumentCropper({ request, onCancel, onComplete }: DocumentCropp
             onCropComplete={(_croppedArea, croppedAreaPixels) => setArea(croppedAreaPixels)}
           />
         </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ busy: enhancing, selected: enhanced }}
+          disabled={enhancing}
+          onPress={() => { void toggleEnhancement(); }}
+          style={[styles.enhanceButton, enhanced && styles.enhanceButtonActive, enhancing && styles.disabledButton]}
+        >
+          <MaterialCommunityIcons name="magic-staff" size={20} color={enhanced ? '#ffffff' : '#1f5fbf'} />
+          <Text style={[styles.enhanceText, enhanced && styles.enhanceTextActive]}>
+            {enhancing ? 'Mejorando lectura…' : enhanced ? 'Lectura mejorada · quitar' : 'Mejorar lectura'}
+          </Text>
+        </Pressable>
+        <Text style={styles.enhanceHint}>Aumenta luz y contraste para facilitar la lectura del texto impreso y manuscrito.</Text>
         <View style={styles.controls}>
           <Text style={styles.zoomLabel}>Zoom</Text>
           <input
@@ -109,6 +168,11 @@ const styles = StyleSheet.create({
   subtitle: { color: '#53657d', fontSize: 14, lineHeight: 20 },
   cropArea: { height: 460, position: 'relative', backgroundColor: '#182638', borderRadius: 10, overflow: 'hidden' },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  enhanceButton: { minHeight: 44, paddingHorizontal: 14, borderWidth: 1, borderColor: '#1f5fbf', borderRadius: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  enhanceButtonActive: { backgroundColor: '#1f5fbf' },
+  enhanceText: { color: '#1f5fbf', fontWeight: '700' },
+  enhanceTextActive: { color: '#ffffff' },
+  enhanceHint: { color: '#53657d', fontSize: 12, lineHeight: 17 },
   zoomLabel: { color: '#53657d', fontWeight: '700' },
   slider: { flex: 1 },
   error: { color: '#a43d3d', fontSize: 13 },
