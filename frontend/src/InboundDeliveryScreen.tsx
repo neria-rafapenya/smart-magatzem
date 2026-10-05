@@ -68,6 +68,7 @@ import type {
   ManualDocumentData,
 } from "./types";
 import { FeedbackNotice } from "./FeedbackNotice";
+import { OnboardingCoach } from "./OnboardingCoach";
 
 type SelectedDocument = {
   filename: string;
@@ -2995,6 +2996,9 @@ export function InboundDeliveryScreen({
         error={error}
         onClosed={closeManualAfterSuccess ? finishManualReview : undefined}
       />
+      {!documentType && !successNotice && activeScreen === "intake" ? (
+        <OnboardingCoach session={session} />
+      ) : null}
     </View>
   );
 }
